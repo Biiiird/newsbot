@@ -12,6 +12,17 @@ from .ingest import rss, telegram_reader
 from .llm import llm_from_settings
 
 log = logging.getLogger(__name__)
+SHUTDOWN_GRACE_SEC = 10
+
+
+async def stop_tasks(tasks: list[asyncio.Task], grace: float = SHUTDOWN_GRACE_SEC) -> None:
+    """Give tasks `grace` seconds to finish what they are doing (e.g. a post being sent), then cancel.
+    A cancelled story stays queued and is scored again on the next start."""
+    _, pending = await asyncio.wait(tasks, timeout=grace)
+    for t in pending:
+        log.info("%s still busy after %ss, cancelling", t.get_name(), grace)
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def run_all(settings: Settings) -> None:
@@ -59,8 +70,9 @@ async def run_all(settings: Settings) -> None:
     try:
         await stop.wait()
     finally:
+        log.info("stopping...")
         stop.set()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await stop_tasks(tasks)
         if app:
             await app.updater.stop()
             await app.stop()

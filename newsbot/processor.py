@@ -32,9 +32,11 @@ def route(a: Assessment, trust: str, settings: Settings) -> str:
 
 
 async def process_once(db: DB, settings: Settings, llm: LLM, limit: int = 10,
-                       resolver: MediaResolver | None = None) -> Counter:
+                       resolver: MediaResolver | None = None, stop: asyncio.Event | None = None) -> Counter:
     counts: Counter = Counter()
     for row in db.new_clusters(limit):
+        if stop is not None and stop.is_set():
+            break  # shutting down: the rest stay 'new' for the next run
         item = dict(row)
         cid = item["cluster_id"]
         recent = [dict(p) for p in db.recent_posts(settings.dedup_window_hours)]
@@ -60,10 +62,11 @@ async def process_once(db: DB, settings: Settings, llm: LLM, limit: int = 10,
             continue
 
         decision = route(a, item["trust"], settings)
+        # look up pictures before saving anything, so a shutdown in between can't lose the story
+        media = await resolver.resolve(a.people) if resolver and decision != "dropped" else []
         db.set_cluster(cid, "dropped" if decision == "dropped" else "scored",
                        importance=a.importance, risk=a.risk, category=a.category, reason=a.reason)
         if decision != "dropped":
-            media = await resolver.resolve(a.people) if resolver else []
             db.create_post(cid, a.headline, item["source"], item.get("url"), decision,
                            a.importance, a.risk, a.category, media)
             log.info("%s (%s/%s): %s%s", decision, a.importance, a.risk, a.headline,
@@ -77,7 +80,7 @@ async def run(db: DB, settings: Settings, llm: LLM, stop: asyncio.Event, interva
     log.info("Processor running (model: %s)", names.get(settings.llm_provider, settings.llm_model))
     resolver = resolver_from_settings(settings)
     while not stop.is_set():
-        counts = await process_once(db, settings, llm, resolver=resolver)
+        counts = await process_once(db, settings, llm, resolver=resolver, stop=stop)
         wait = interval
         if counts.get("waiting_for_limit"):
             wait = 300  # subscription limit hit: stories stay queued, retry in 5 minutes

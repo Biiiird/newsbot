@@ -263,6 +263,9 @@ class ClaudeCLILLM:
         except asyncio.TimeoutError:
             proc.kill()
             raise RuntimeError(f"claude -p timed out after {self.timeout}s")
+        except asyncio.CancelledError:  # shutting down: don't leave claude running
+            proc.kill()
+            raise
 
         text = out.decode(errors="replace").strip()
         try:

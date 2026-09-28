@@ -25,6 +25,9 @@ elif mode == "limit":
     print(json.dumps({{"type": "result", "is_error": True, "result": "Claude AI usage limit reached|1790000000"}}))
 elif mode == "garbage":
     print("Invalid API key · Please run /login")
+elif mode == "slow":
+    open(os.environ["FAKE_LOG"] + ".pid", "w").write(str(os.getpid()))
+    import time; time.sleep(60)
 '''
 
 
@@ -98,3 +101,28 @@ async def test_no_fallback_raises_limit_and_keeps_story_queued(db, settings, hig
 async def test_other_cli_error_falls_back_per_item():
     llm = FallbackLLM(Stub(RuntimeError("timeout")), Stub(name="api"))
     assert (await llm.assess(ITEM)).headline == "api"
+
+
+async def test_cancel_kills_claude_process(fake_cli, monkeypatch):
+    import asyncio
+    import os
+    path, log, tmp = fake_cli
+    monkeypatch.setenv("FAKE_MODE", "slow")
+    task = asyncio.create_task(ClaudeCLILLM(path, "haiku", workdir=str(tmp / "work")).assess(ITEM))
+    pid_file = tmp / "call.json.pid"
+    for _ in range(100):
+        if pid_file.exists() and pid_file.read_text():
+            break
+        await asyncio.sleep(0.05)
+    pid = int(pid_file.read_text())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(40):  # the process is gone (a reaped child raises, a zombie reports state Z)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        pytest.fail("claude process still running after cancel")

@@ -106,6 +106,45 @@ def test_headline_html_bolds_prefix():
     assert publisher.headline_html("🇺🇦 JUST IN: <x>") == "🇺🇦 JUST IN: &lt;x&gt;"
 
 
+@pytest.mark.asyncio
+async def test_process_once_stops_between_stories(db, settings, high):
+    import asyncio
+    t = now()
+    for i, title in enumerate(["Estonia approves record defence budget for next year",
+                               "Latvia expels Russian diplomat over espionage allegations",
+                               "Lithuania closes border crossing with Belarus again"]):
+        store_item(db, settings, high, title, url=f"u{i}", published_at=t)
+    stop = asyncio.Event()
+
+    class StopAfterFirst(FakeLLM):
+        async def assess(self, item):
+            stop.set()  # shutdown requested while the first story is being scored
+            return await super().assess(item)
+
+    llm = StopAfterFirst([A(), A(), A()])
+    assert await process_once(db, settings, llm, stop=stop) == {"pending_approval": 1}
+    assert len(db.new_clusters()) == 2  # the rest stay queued
+
+
+@pytest.mark.asyncio
+async def test_stop_tasks_cancels_stuck_tasks():
+    import asyncio
+    from newsbot.runner import stop_tasks
+    finished = []
+
+    async def quick():
+        await asyncio.sleep(0.01)
+        finished.append("quick")
+
+    async def stuck():
+        await asyncio.sleep(60)
+        finished.append("stuck")
+
+    tasks = [asyncio.create_task(quick(), name="quick"), asyncio.create_task(stuck(), name="stuck")]
+    await asyncio.wait_for(stop_tasks(tasks, grace=0.2), timeout=2)
+    assert finished == ["quick"] and tasks[1].cancelled()
+
+
 def test_user_message_mentions_state_media():
     msg = build_user_message({"source": "RIA", "trust": "low", "state_media": 1, "lang": "ru",
                               "title": "Заголовок", "body": "Текст новости", "item_count": 2})
