@@ -4,7 +4,9 @@ import pytest
 
 from newsbot import approval_bot, publisher
 from newsbot.config import load_settings
-from newsbot.db import now
+from datetime import timedelta
+
+from newsbot.db import iso, now
 from newsbot.ingest import store_item
 from newsbot.llm import Assessment, ClaudeLLM, MockLLM, build_user_message
 from newsbot.processor import process_once, route
@@ -209,6 +211,63 @@ async def test_publisher_failures(db, settings):
     assert await publisher.publish_next(db, settings, [Recorder(), Recorder("x", fail=True)], notify)
     assert db.get_post(p2)["status"] == "published" and "some targets failed" in notes[1]
     assert len(db.q("SELECT * FROM publish_log")) == 3
+
+
+@pytest.mark.asyncio
+async def test_publisher_retries_network_errors(db, settings):
+    import httpx
+    from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
+
+    class Flaky:
+        name = "telegram"
+
+        def __init__(self, errors):
+            self.errors, self.posts = list(errors), []
+
+        async def publish(self, post):
+            if self.errors:
+                raise self.errors.pop(0)
+            self.posts.append(post["id"])
+            return "m1"
+
+    notes = []
+
+    async def notify(t):
+        notes.append(t)
+
+    def due_now(pid):  # skip the wait
+        db.update_post(pid, retry_after=iso(now() - timedelta(seconds=1)))
+
+    p = _post(db, "approved", 8, "flaky")
+    other = _post(db, "approved", 7, "other")
+    t = Flaky([NetworkError("httpx.ConnectError: "), TimedOut(), RetryAfter(timedelta(seconds=3))])
+    assert not await publisher.publish_next(db, settings, [t], notify)
+    row = db.get_post(p)
+    assert row["status"] == "approved" and row["retry_after"] and "ConnectError" in row["error"]
+    assert db.next_approved()["id"] == other  # waiting post doesn't block the queue
+    db.update_post(other, status="rejected")
+    for _ in range(2):
+        due_now(p)
+        assert not await publisher.publish_next(db, settings, [t], notify)
+    due_now(p)
+    assert await publisher.publish_next(db, settings, [t], notify)
+    assert t.posts == [p] and db.get_post(p)["status"] == "published" and not notes
+    assert db.get_post(p)["retry_after"] is None
+
+    # gives up after the last retry
+    q = _post(db, "approved", 8, "down")
+    down = Flaky([httpx.ConnectError("down")] * 10)
+    for _ in range(len(publisher.RETRY_DELAYS)):
+        assert not await publisher.publish_next(db, settings, [down], notify)
+        assert db.get_post(q)["status"] == "approved"
+        due_now(q)
+    assert not await publisher.publish_next(db, settings, [down], notify)
+    assert db.get_post(q)["status"] == "failed" and "failed to publish" in notes[0]
+
+    # permanent errors fail straight away
+    r = _post(db, "approved", 8, "bad")
+    assert not await publisher.publish_next(db, settings, [Flaky([BadRequest("chat not found")])], notify)
+    assert db.get_post(r)["status"] == "failed"
 
 
 def test_telegram_text_and_targets(db, settings):

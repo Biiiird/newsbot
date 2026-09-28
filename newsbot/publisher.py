@@ -15,6 +15,19 @@ from .db import DB, iso, now
 log = logging.getLogger(__name__)
 Notify = Callable[[str], Awaitable[None]]
 CAPTION_LIMIT = 1024  # Telegram's limit for photo captions (plain messages allow 4096)
+RETRY_DELAYS = (30, 60, 120, 240, 480)  # seconds to wait after each network failure, then give up
+
+
+def is_transient(e: Exception) -> bool:
+    """Network trouble or flood control: worth retrying. Anything else (bad request, no rights) is not."""
+    try:
+        from telegram.error import BadRequest, NetworkError, RetryAfter
+        if isinstance(e, RetryAfter) or (isinstance(e, NetworkError) and not isinstance(e, BadRequest)):
+            return True
+    except ImportError:
+        pass
+    import httpx
+    return isinstance(e, (httpx.TransportError, ConnectionError, asyncio.TimeoutError))
 
 
 class Target(Protocol):
@@ -152,7 +165,7 @@ async def publish_next(db: DB, settings: Settings, targets: list[Target], notify
     if post is None or wait_seconds(db, settings) > 0:
         return False
 
-    errors = []
+    errors, transient = [], True
     for t in targets:
         try:
             ext_id = await t.publish(post)
@@ -161,14 +174,23 @@ async def publish_next(db: DB, settings: Settings, targets: list[Target], notify
             log.exception("publish to %s failed", t.name)
             db.log_publish(post["id"], t.name, False, error=str(e)[:500])
             errors.append(f"{t.name}: {e}")
+            transient = transient and is_transient(e)
 
     if len(errors) == len(targets):
+        attempt = db.failed_attempts(post["id"]) // len(targets)  # failures so far, this one included
+        if transient and attempt <= len(RETRY_DELAYS):
+            delay = RETRY_DELAYS[attempt - 1]
+            db.update_post(post["id"], retry_after=iso(now() + timedelta(seconds=delay)),
+                           error="; ".join(errors)[:1000])
+            log.warning("post #%s: network error, retry %s/%s in %ss", post["id"], attempt,
+                        len(RETRY_DELAYS), delay)
+            return False
         db.update_post(post["id"], status="failed", error="; ".join(errors)[:1000])
         if notify:
             await notify(f"⚠️ Post #{post['id']} failed to publish:\n{'; '.join(errors)[:500]}")
         return False
 
-    db.update_post(post["id"], status="published", published_at=iso(),
+    db.update_post(post["id"], status="published", published_at=iso(), retry_after=None,
                    error="; ".join(errors)[:1000] if errors else None)
     log.info("published #%s to %s", post["id"], ", ".join(t.name for t in targets))
     if notify and errors:

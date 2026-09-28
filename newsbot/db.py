@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS posts (
     risk              TEXT,
     category          TEXT,
     media             TEXT,                      -- JSON list of images, see media.py
+    retry_after       TEXT,                      -- after a network error: don't retry before this
     admin_message_id  INTEGER,
     error             TEXT,
     created_at        TEXT NOT NULL,
@@ -109,6 +110,8 @@ class DB:
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(posts)")}
         if "media" not in cols:  # databases created before images were added
             self.conn.execute("ALTER TABLE posts ADD COLUMN media TEXT")
+        if "retry_after" not in cols:
+            self.conn.execute("ALTER TABLE posts ADD COLUMN retry_after TEXT")
 
     # ---------- generic ----------
     def q(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
@@ -212,9 +215,14 @@ class DB:
             "SELECT * FROM posts WHERE status = 'pending_approval' AND admin_message_id IS NULL ORDER BY id")
 
     def next_approved(self) -> sqlite3.Row | None:
-        # most important first, then oldest
+        # most important first, then oldest; posts waiting to retry after a network error are skipped
         return self.one(
-            "SELECT * FROM posts WHERE status = 'approved' ORDER BY importance DESC, id LIMIT 1")
+            """SELECT * FROM posts WHERE status = 'approved' AND (retry_after IS NULL OR retry_after <= ?)
+               ORDER BY importance DESC, id LIMIT 1""", (iso(),))
+
+    def failed_attempts(self, post_id: int) -> int:
+        return int(self.one("SELECT COUNT(*) AS n FROM publish_log WHERE post_id = ? AND ok = 0",
+                            (post_id,))["n"])
 
     def last_published_at(self) -> datetime | None:
         row = self.one("SELECT MAX(published_at) AS t FROM posts WHERE status = 'published'")
