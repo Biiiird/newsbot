@@ -1,0 +1,8 @@
+services:
+  newsbot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data        # SQLite database + Telegram reader session
+      - ./config:/app/config    # edit sources.yaml without rebuilding

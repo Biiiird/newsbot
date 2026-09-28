@@ -1,0 +1,79 @@
+# trust: high   -> can auto-post (when AUTO_POST=true; any trust if AUTO_REQUIRE_HIGH_TRUST=false)
+#        medium -> always goes to approval
+#        low    -> always goes to approval, headline must attribute the claim
+# lang is a hint for the model; it translates everything to English.
+
+rss:
+  - name: ERR News
+    url: https://news.err.ee/rss
+    trust: high
+    lang: en
+  - name: LSM Latvia
+    url: https://eng.lsm.lv/rss/
+    trust: high
+    lang: en
+  - name: Kyiv Independent
+    url: https://kyivindependent.com/news-archive/rss/
+    trust: medium
+    lang: en
+  - name: Meduza
+    url: https://meduza.io/rss/en/all
+    trust: medium
+    lang: en
+  - name: Al Jazeera
+    url: https://www.aljazeera.com/xml/rss/all.xml
+    trust: medium
+    lang: en
+  - name: BBC World
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+    trust: high
+    lang: en
+  - name: The Guardian
+    url: https://www.theguardian.com/world/rss
+    trust: high
+    lang: en
+  - name: NYT World
+    url: https://rss.nytimes.com/services/xml/rss/nyt/World.xml
+    trust: high
+    lang: en
+  - name: France 24
+    url: https://www.france24.com/en/rss
+    trust: high
+    lang: en
+  - name: DW
+    url: https://rss.dw.com/rdf/rss-en-world
+    trust: high
+    lang: en
+  - name: Yle News
+    url: https://yle.fi/rss/news
+    trust: high
+    lang: en
+  - name: LRT English
+    url: https://www.lrt.lt/en/news-in-english?rss
+    trust: high
+    lang: en
+  - name: Politico Europe
+    url: https://www.politico.eu/feed/
+    trust: medium
+    lang: en
+  - name: SCMP World
+    url: https://www.scmp.com/rss/91/feed
+    trust: medium
+    lang: en
+  - name: Times of Israel
+    url: https://www.timesofisrael.com/feed/
+    trust: medium
+    lang: en
+  - name: CNBC World
+    url: https://www.cnbc.com/id/100727362/device/rss/rss.html
+    trust: medium
+    lang: en
+
+# Public Telegram channels, read in real time through a user account (needs TG_API_ID / TG_API_HASH
+# and a one-time `python -m newsbot telegram-login`). Use the @username of the channel.
+telegram:
+  # - name: Example channel
+  #   handle: "@example_channel"
+  #   trust: low
+  #   lang: ru
+  #   state_media: true   # headline will say "Russian state media claims..."
