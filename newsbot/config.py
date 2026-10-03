@@ -56,6 +56,7 @@ class Settings:
     telegram_include_source: bool = True
     attach_images: bool = True
     media_max_images: int = 2
+    media_min_side: int = 600
 
     tg_api_id: int = 0
     tg_api_hash: str = ""
@@ -147,6 +148,7 @@ def load_settings(env_file: str | None = ".env") -> Settings:
         telegram_include_source=_bool("TELEGRAM_INCLUDE_SOURCE", True),
         attach_images=_bool("ATTACH_IMAGES", True),
         media_max_images=_int("MEDIA_MAX_IMAGES", 2),
+        media_min_side=_int("MEDIA_MIN_SIDE", 600),
         tg_api_id=_int("TG_API_ID", 0),
         tg_api_hash=_str("TG_API_HASH"),
         tg_session=_str("TG_SESSION", "data/reader"),

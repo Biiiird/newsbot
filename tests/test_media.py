@@ -46,25 +46,66 @@ def test_assessment_cleans_people_and_countries():
 
 
 # ---------- lookup ----------
+def _wiki(pages, files=None):
+    """Fake Wikipedia API: article lookups by title, then Commons metadata for "File:" titles."""
+    files = files or {}
+
+    def handler(r):
+        title = r.url.params["titles"]
+        if title.startswith("File:"):
+            meta = files.get(title[5:], {})
+            return httpx.Response(200, json={"query": {"pages": [
+                {"title": title, "imageinfo": [{"extmetadata": {k: {"value": v} for k, v in meta.items()}}]}]}})
+        return httpx.Response(200, json={"query": {"pages": [pages[title]]}})
+    return handler
+
+
+def _page(title, url, width=1600, height=2000, file="Portrait.jpg"):
+    return {"title": title, "thumbnail": {"source": url}, "original": {"width": width, "height": height},
+            "pageimage": file}
+
+
 @pytest.mark.asyncio
 async def test_resolver_portraits(monkeypatch):
     pages = {
-        "Donald Trump": {"title": "Donald Trump", "thumbnail": {"source": "https://img/trump.jpg"}},
+        "Donald Trump": _page("Donald Trump", "https://img/trump.jpg", file="Trump_portrait.jpg"),
         "Mercury": {"title": "Mercury", "pageprops": {"disambiguation": ""}},
         "Nobody Atall": {"title": "Nobody Atall", "missing": True},
     }
-    calls = _mock_client(monkeypatch, lambda r: httpx.Response(
-        200, json={"query": {"pages": [pages[r.url.params["titles"]]]}}))
+    calls = _mock_client(monkeypatch, _wiki(pages))
     r = media.MediaResolver(max_images=2)
 
     # ambiguous and missing names are skipped; only max_images names are looked up
     assert await r.resolve(["Donald Trump", "Mercury", "Nobody Atall"]) == [TRUMP]
-    assert len(calls) == 2
+    assert len(calls) == 3  # Trump page + its file metadata, Mercury page
     assert await r.resolve([]) == []  # not about a person: no pictures
 
     assert (await r.resolve(["donald trump"]))[0]["url"] == "https://img/trump.jpg"
-    assert len(calls) == 2  # cached
+    assert len(calls) == 3  # cached
     assert await r.resolve(["Mercury"]) == []
+
+
+@pytest.mark.asyncio
+async def test_resolver_skips_low_quality_portraits(monkeypatch):
+    pages = {
+        "Small": _page("Small", "https://img/small.jpg", width=371, height=500),
+        "Still": _page("Still", "https://img/still.png", width=619, height=748, file="Politician_2026.png"),
+        "Named": _page("Named", "https://img/named.png", file="Named_Screenshot.png"),
+        "Credit": _page("Credit", "https://img/credit.jpg", file="Credit.jpg"),
+        "Good": _page("Good", "https://img/good.jpg", width=602, height=784, file="Good_Official_Portrait_(cropped).jpg"),
+    }
+    files = {
+        "Politician_2026.png": {"Categories": "Female politicians of Morocco|Still images of YouTube videos"},
+        "Credit.jpg": {"Credit": '<a href="https://www.youtube.com/watch?v=x">https://www.youtube.com/watch?v=x</a>'},
+        "Good_Official_Portrait_(cropped).jpg": {"Categories": "Official portraits|Extracted images",
+                                                 "Credit": "La Moncloa"},
+    }
+    _mock_client(monkeypatch, _wiki(pages, files))
+    r = media.MediaResolver(max_images=5, min_side=600)
+    assert await r.resolve(["Small", "Still", "Named", "Credit", "Good"]) == [
+        {"kind": "person", "name": "Good", "url": "https://img/good.jpg"}]
+    assert await media.MediaResolver(min_side=300).resolve(["Small"]) == [
+        {"kind": "person", "name": "Small", "url": "https://img/small.jpg"}]
 
 
 @pytest.mark.asyncio

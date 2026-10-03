@@ -61,7 +61,7 @@ The default model is Haiku 4.5, which is cheap and fast. Each story costs one ca
 
 Bot commands: `/pending` re-sends the waiting drafts, `/stats` shows counts, `/cancel` stops an edit.
 
-**Pictures.** When a story is about public figures, the post gets their portraits, up to 2 (`MEDIA_MAX_IMAGES`), with the post text as the caption. Portraits are the person's Wikipedia photo, freely licensed images only. Countries only appear as flag emojis in the text, so a story that isn't about a person has no pictures. Each draft lists its images as links so you can check them before publishing. Turn it off with `ATTACH_IMAGES=false`. Pictures go to Telegram only, not X.
+**Pictures.** When a story is about public figures, the post gets their portraits, up to 2 (`MEDIA_MAX_IMAGES`), with the post text as the caption. Portraits are the person's Wikipedia photo, freely licensed images only. Low-quality pictures are skipped: originals under `MEDIA_MIN_SIDE` pixels (600 by default) on the shorter side, and video stills or screenshots. A person with no good picture gets none. Countries only appear as flag emojis in the text, so a story that isn't about a person has no pictures. Each draft lists its images as links so you can check them before publishing. Turn it off with `ATTACH_IMAGES=false`. Pictures go to Telegram only, not X.
 
 ## 4. Read Telegram channels (optional)
 

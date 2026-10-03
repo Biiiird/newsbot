@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 def resolver_from_settings(settings: Settings) -> MediaResolver | None:
     if not settings.attach_images:
         return None
-    return MediaResolver(settings.media_max_images)
+    return MediaResolver(settings.media_max_images, settings.media_min_side)
 
 
 def route(a: Assessment, trust: str, settings: Settings) -> str:
