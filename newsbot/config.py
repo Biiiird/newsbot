@@ -28,7 +28,7 @@ def _str(name: str, default: str = "") -> str:
 @dataclass
 class Source:
     name: str
-    kind: str  # "rss" | "telegram"
+    kind: str  # "rss" | "telegram" | "video"
     trust: str = "medium"  # high | medium | low
     lang: str = "en"
     url: str = ""  # rss
@@ -57,6 +57,10 @@ class Settings:
     attach_images: bool = True
     media_max_images: int = 2
     media_min_side: int = 600
+    video_replies: bool = True
+    video_auto_post: bool = False
+    video_window_hours: int = 6
+    video_poll_sec: int = 300
 
     tg_api_id: int = 0
     tg_api_hash: str = ""
@@ -93,6 +97,14 @@ class Settings:
         return [s for s in self.sources if s.kind == "telegram"]
 
     @property
+    def video_sources(self) -> list[Source]:
+        return [s for s in self.sources if s.kind == "video"]
+
+    @property
+    def video_enabled(self) -> bool:
+        return self.video_replies and bool(self.video_sources)
+
+    @property
     def telegram_reader_enabled(self) -> bool:
         return bool(self.tg_api_id and self.tg_api_hash and self.telegram_sources)
 
@@ -119,6 +131,9 @@ def load_sources(path: str) -> list[Source]:
             trust=entry.get("trust", "low"), lang=entry.get("lang", "ru"),
             state_media=bool(entry.get("state_media", False)),
         ))
+    for entry in data.get("video") or []:  # official channels whose uploads are attached as replies
+        out.append(Source(name=entry["name"], kind="video", url=entry["url"], trust="high",
+                          lang=entry.get("lang", "en")))
     return out
 
 
@@ -149,6 +164,10 @@ def load_settings(env_file: str | None = ".env") -> Settings:
         attach_images=_bool("ATTACH_IMAGES", True),
         media_max_images=_int("MEDIA_MAX_IMAGES", 2),
         media_min_side=_int("MEDIA_MIN_SIDE", 600),
+        video_replies=_bool("VIDEO_REPLIES", True),
+        video_auto_post=_bool("VIDEO_AUTO_POST", False),
+        video_window_hours=_int("VIDEO_WINDOW_HOURS", 6),
+        video_poll_sec=_int("VIDEO_POLL_SEC", 300),
         tg_api_id=_int("TG_API_ID", 0),
         tg_api_hash=_str("TG_API_HASH"),
         tg_session=_str("TG_SESSION", "data/reader"),

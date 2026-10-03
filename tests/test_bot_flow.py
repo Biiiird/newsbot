@@ -114,3 +114,19 @@ async def test_reject_and_start(bot_env, db):
     assert db.get_post(pid)["status"] == "rejected"
     await app.process_update(_text(app, "/start"))
     assert "Your chat id: 4242" in fake.sent("sendMessage")[-1]["text"]
+
+
+async def test_video_draft_sent_then_approved(bot_env, db):
+    app, fake = bot_env
+    pid = _draft(db)
+    db.update_post(pid, status="published", video_moment="Kaja Kallas press conference in Tallinn")
+    db.add_video("Kremlin", "Press conference", "", "https://v/1", None)
+    rid = db.create_video_reply(pid, db.one("SELECT id FROM videos")["id"], "pending_approval")
+    await app.bot_data["send_video_draft"](app.bot, db.get_video_reply(rid))
+    sent = fake.sent("sendMessage")[0]
+    assert "Video for post #" in sent["text"] and "va:" in json.dumps(sent["reply_markup"])
+    assert '"url": "https://v/1"' in json.dumps(sent["link_preview_options"])  # watchable in the admin chat
+
+    await app.process_update(_callback(app, f"va:{rid}"))
+    assert db.get_video_reply(rid)["status"] == "approved"
+    assert "Approved" in fake.sent("editMessageText")[0]["text"]

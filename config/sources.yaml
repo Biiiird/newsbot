@@ -71,6 +71,21 @@ rss:
 
 # Public Telegram channels, read in real time through a user account (needs TG_API_ID / TG_API_HASH
 # and a one-time `python -m newsbot telegram-login`). Use the @username of the channel.
+# Official video channels. When a post is about a speech, briefing or interview, the matching upload
+# is posted as a reply under it (see newsbot/video.py). YouTube channel feeds:
+# https://www.youtube.com/feeds/videos.xml?channel_id=<channel id>
+video:
+  - name: The White House
+    url: https://www.youtube.com/feeds/videos.xml?channel_id=UCYxRlFDqcWM4y7FfpiAN3KQ
+  - name: U.S. Department of State
+    url: https://www.youtube.com/feeds/videos.xml?channel_id=UC6ZhpmNnLxlOYipqh8wbM3A
+  - name: U.S. Department of War
+    url: https://www.youtube.com/feeds/videos.xml?channel_id=UCpuofAxlrUAgnu7QEwKQwxw
+  - name: C-SPAN
+    url: https://www.youtube.com/feeds/videos.xml?channel_id=UCb--64Gl51jIEVE-GLDAVTg
+  - name: Kremlin
+    url: http://en.kremlin.ru/multimedia/video/feed
+
 telegram:
   # - name: Example channel
   #   handle: "@example_channel"

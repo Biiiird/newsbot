@@ -68,9 +68,10 @@ async def process_once(db: DB, settings: Settings, llm: LLM, limit: int = 10,
                        importance=a.importance, risk=a.risk, category=a.category, reason=a.reason)
         if decision != "dropped":
             db.create_post(cid, a.headline, item["source"], item.get("url"), decision,
-                           a.importance, a.risk, a.category, media)
-            log.info("%s (%s/%s): %s%s", decision, a.importance, a.risk, a.headline,
-                     f" [images: {', '.join(m['name'] for m in media)}]" if media else "")
+                           a.importance, a.risk, a.category, media, a.video_moment)
+            log.info("%s (%s/%s): %s%s%s", decision, a.importance, a.risk, a.headline,
+                     f" [images: {', '.join(m['name'] for m in media)}]" if media else "",
+                     f" [video moment: {a.video_moment}]" if a.video_moment else "")
         counts[decision] += 1
     return counts
 

@@ -4,6 +4,8 @@ Post lifecycle (posts.status):
     pending_approval -> approved -> published
                      -> rejected
     approved -> failed (publishing error)
+
+Video replies (video_replies.status) follow the same lifecycle, see video.py.
 """
 from __future__ import annotations
 
@@ -59,6 +61,7 @@ CREATE TABLE IF NOT EXISTS posts (
     risk              TEXT,
     category          TEXT,
     media             TEXT,                      -- JSON list of images, see media.py
+    video_moment      TEXT,                      -- filmed occasion the post is about, see video.py
     retry_after       TEXT,                      -- after a network error: don't retry before this
     admin_message_id  INTEGER,
     error             TEXT,
@@ -77,6 +80,38 @@ CREATE TABLE IF NOT EXISTS publish_log (
     error        TEXT,
     created_at   TEXT NOT NULL
 );
+
+-- uploads from official video channels (config/sources.yaml, video:)
+CREATE TABLE IF NOT EXISTS videos (
+    id            INTEGER PRIMARY KEY,
+    source        TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    description   TEXT,
+    url           TEXT NOT NULL UNIQUE,
+    published_at  TEXT,
+    seen_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_videos_published ON videos(published_at);
+
+-- which videos were already shown to Claude for a post, so each pair is judged once
+CREATE TABLE IF NOT EXISTS video_checks (
+    post_id   INTEGER NOT NULL REFERENCES posts(id),
+    video_id  INTEGER NOT NULL REFERENCES videos(id),
+    PRIMARY KEY (post_id, video_id)
+);
+
+CREATE TABLE IF NOT EXISTS video_replies (
+    id                INTEGER PRIMARY KEY,
+    post_id           INTEGER NOT NULL UNIQUE REFERENCES posts(id),
+    video_id          INTEGER NOT NULL REFERENCES videos(id),
+    status            TEXT NOT NULL,             -- pending_approval | approved | published | rejected | failed
+    admin_message_id  INTEGER,
+    external_id       TEXT,
+    error             TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_video_replies_status ON video_replies(status);
 """
 
 
@@ -112,6 +147,8 @@ class DB:
             self.conn.execute("ALTER TABLE posts ADD COLUMN media TEXT")
         if "retry_after" not in cols:
             self.conn.execute("ALTER TABLE posts ADD COLUMN retry_after TEXT")
+        if "video_moment" not in cols:
+            self.conn.execute("ALTER TABLE posts ADD COLUMN video_moment TEXT")
 
     # ---------- generic ----------
     def q(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
@@ -183,14 +220,14 @@ class DB:
     # ---------- posts ----------
     def create_post(self, cluster_id: int, headline: str, source_name: str, source_url: str | None,
                     status: str, importance: int, risk: str, category: str,
-                    media: list[dict[str, str]] | None = None) -> int:
+                    media: list[dict[str, str]] | None = None, video_moment: str | None = None) -> int:
         ts = iso()
         return self.exec(
             """INSERT INTO posts (cluster_id, headline, source_name, source_url, status,
-                                  importance, risk, category, media, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                                  importance, risk, category, media, video_moment, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (cluster_id, headline, source_name, source_url, status, importance, risk, category,
-             json.dumps(media) if media else None, ts, ts),
+             json.dumps(media) if media else None, video_moment or None, ts, ts),
         )
 
     def get_post(self, post_id: int) -> sqlite3.Row | None:
@@ -240,6 +277,64 @@ class DB:
             (post_id, platform, external_id, int(ok), error, iso()),
         )
 
+    def telegram_message_id(self, post_id: int) -> str | None:
+        row = self.one("""SELECT external_id FROM publish_log WHERE post_id = ? AND platform = 'telegram'
+                          AND ok = 1 AND external_id IS NOT NULL ORDER BY id DESC LIMIT 1""", (post_id,))
+        return row["external_id"] if row else None
+
+    # ---------- videos ----------
+    def add_video(self, source: str, title: str, description: str, url: str,
+                  published_at: datetime | None) -> bool:
+        """Save an upload. Returns False if it was already known."""
+        cur = self.conn.execute(
+            """INSERT OR IGNORE INTO videos (source, title, description, url, published_at, seen_at)
+               VALUES (?,?,?,?,?,?)""",
+            (source, title, description, url, iso(published_at) if published_at else None, iso()))
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def get_video(self, video_id: int) -> sqlite3.Row | None:
+        return self.one("SELECT * FROM videos WHERE id = ?", (video_id,))
+
+    def posts_wanting_video(self, since: datetime) -> list[sqlite3.Row]:
+        """Published posts about a filmed moment, created after `since`, without a video reply yet."""
+        return self.q(
+            """SELECT * FROM posts p WHERE p.status = 'published' AND p.video_moment IS NOT NULL
+               AND p.created_at >= ? AND NOT EXISTS (SELECT 1 FROM video_replies r WHERE r.post_id = p.id)
+               ORDER BY p.id""", (iso(since),))
+
+    def unchecked_videos(self, post_id: int, start: datetime, end: datetime) -> list[sqlite3.Row]:
+        return self.q(
+            """SELECT * FROM videos v WHERE v.published_at BETWEEN ? AND ?
+               AND NOT EXISTS (SELECT 1 FROM video_checks c WHERE c.post_id = ? AND c.video_id = v.id)
+               ORDER BY v.published_at DESC""", (iso(start), iso(end), post_id))
+
+    def mark_checked(self, post_id: int, video_ids: list[int]) -> None:
+        self.conn.executemany("INSERT OR IGNORE INTO video_checks (post_id, video_id) VALUES (?,?)",
+                              [(post_id, v) for v in video_ids])
+        self.conn.commit()
+
+    def create_video_reply(self, post_id: int, video_id: int, status: str) -> int:
+        ts = iso()
+        return self.exec(
+            """INSERT INTO video_replies (post_id, video_id, status, created_at, updated_at)
+               VALUES (?,?,?,?,?)""", (post_id, video_id, status, ts, ts))
+
+    def get_video_reply(self, reply_id: int) -> sqlite3.Row | None:
+        return self.one("SELECT * FROM video_replies WHERE id = ?", (reply_id,))
+
+    def update_video_reply(self, reply_id: int, **fields: Any) -> None:
+        fields["updated_at"] = iso()
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        self.exec(f"UPDATE video_replies SET {cols} WHERE id = ?", (*fields.values(), reply_id))
+
+    def video_replies_by_status(self, status: str) -> list[sqlite3.Row]:
+        return self.q("SELECT * FROM video_replies WHERE status = ? ORDER BY id", (status,))
+
+    def unsent_video_drafts(self) -> list[sqlite3.Row]:
+        return self.q("""SELECT * FROM video_replies WHERE status = 'pending_approval'
+                         AND admin_message_id IS NULL ORDER BY id""")
+
     def stats(self) -> dict[str, Any]:
         return {
             "items": self.one("SELECT COUNT(*) n FROM items")["n"],
@@ -247,4 +342,6 @@ class DB:
                 "SELECT status, COUNT(*) n FROM clusters GROUP BY status")},
             "posts": {r["status"]: r["n"] for r in self.q(
                 "SELECT status, COUNT(*) n FROM posts GROUP BY status")},
+            "video_replies": {r["status"]: r["n"] for r in self.q(
+                "SELECT status, COUNT(*) n FROM video_replies GROUP BY status")},
         }

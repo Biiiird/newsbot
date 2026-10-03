@@ -203,7 +203,7 @@ def test_build_app_registers_handlers(settings, db):
     settings.telegram_bot_token = "123456:TEST-token"
     settings.admin_chat_id = "42"
     app = approval_bot.build_app(settings, db)
-    assert sum(len(h) for h in app.handlers.values()) == 7
+    assert sum(len(h) for h in app.handlers.values()) == 8
 
 
 # ---------- publisher ----------

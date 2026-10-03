@@ -1,11 +1,12 @@
-"""Runs every component in one process: RSS poller, Telegram reader, processor, approval bot, publisher."""
+"""Runs every component in one process: RSS poller, Telegram reader, processor, approval bot, publisher,
+video replies."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import signal
 
-from . import approval_bot, processor, publisher
+from . import approval_bot, processor, publisher, video
 from .config import Settings
 from .db import DB
 from .ingest import rss, telegram_reader
@@ -63,6 +64,8 @@ async def run_all(settings: Settings) -> None:
     ]
     if app:
         tasks.append(asyncio.create_task(approval_bot.run_draft_sender(app, db, settings, stop), name="drafts"))
+    if settings.video_enabled:
+        tasks.append(asyncio.create_task(video.run(db, settings, llm, app.bot if app else None, stop), name="video"))
     if settings.telegram_reader_enabled:
         tasks.append(asyncio.create_task(telegram_reader.run(db, settings, stop), name="tg_reader"))
 

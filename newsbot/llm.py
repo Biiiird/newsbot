@@ -1,7 +1,8 @@
 """Scoring + rewriting with Claude.
 
 One API call per new story. Claude is forced to answer through a tool, so the output is
-always structured JSON (no parsing of free text).
+always structured JSON (no parsing of free text). A second, small call (match_video) checks
+whether an official video shows the event a post is about, see video.py.
 """
 from __future__ import annotations
 
@@ -58,6 +59,13 @@ victims or minors.
 - countries: ISO 3166-1 alpha-2 codes of the countries the post mentions, main country first, \
 at most 3, e.g. ["UA", "RU"]. Use "EU" for the European Union. Empty if none.
 
+Video: if the news is something a named official said or did on camera at a specific occasion \
+(a speech, address, press conference, briefing, interview, summit statement or televised meeting, \
+e.g. by a head of state or government, a minister or a spokesperson), set video_moment to a short \
+description naming the speaker and the occasion, e.g. "Vladimir Putin speech at the Valdai Discussion \
+Club" or "Marco Rubio press conference in Panama City". Otherwise (attacks, reports, decisions \
+announced in writing, anything without a filmed occasion) use "".
+
 Duplicates: the message may list posts made in the last hours. If the item reports the same event \
 as one of them, even worded differently, from another angle or with a small new detail, set \
 duplicate_of to that post's number. Use 0 if it is a different event, or if it is a major new \
@@ -85,9 +93,34 @@ TOOL = {
                           "description": "Up to 3 ISO 3166-1 alpha-2 country codes, main country first."},
             "duplicate_of": {"type": "integer",
                              "description": "Number of the earlier post about the same event, or 0."},
+            "video_moment": {"type": "string",
+                             "description": "Speaker and filmed occasion the news is about, or empty."},
         },
         "required": ["is_news", "importance", "risk", "category", "headline", "reason", "people", "countries",
-                     "duplicate_of"],
+                     "duplicate_of", "video_moment"],
+    },
+}
+
+MATCH_PROMPT = """You check whether an official video shows the event a news post is about.
+
+You get the post, the filmed moment it refers to, and a numbered list of videos recently uploaded \
+by official channels (channel, upload time, title, description). Answer with the number of the video \
+that shows that same occasion: the same speaker at the same speech, briefing, interview or meeting. \
+A video of the same person at a different event, or a clip about the same topic by someone else, \
+is not a match. If no video clearly matches, or you are unsure, answer 0.
+
+Always answer by calling the submit_match tool."""
+
+MATCH_TOOL = {
+    "name": "submit_match",
+    "description": "Submit which video, if any, shows the moment from the post.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "video": {"type": "integer", "description": "Number of the matching video, or 0 for none."},
+            "reason": {"type": "string", "description": "One short sentence."},
+        },
+        "required": ["video", "reason"],
     },
 }
 
@@ -103,6 +136,7 @@ class Assessment:
     people: list[str] = field(default_factory=list)
     countries: list[str] = field(default_factory=list)
     duplicate_of: int = 0
+    video_moment: str = ""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Assessment":
@@ -117,6 +151,7 @@ class Assessment:
             countries=_unique(COUNTRY_ALIASES.get(c, c) for c in (str(x).strip().upper() for x in _as_list(
                 d.get("countries"))) if re.fullmatch(r"[A-Z]{2}", c))[:3],
             duplicate_of=_int_or_zero(d.get("duplicate_of")),
+            video_moment=str(d.get("video_moment") or "").strip()[:200],
         )
 
 
@@ -154,6 +189,9 @@ def _unique(values) -> list[str]:
 class LLM(Protocol):
     async def assess(self, item: dict[str, Any]) -> Assessment: ...
 
+    async def match_video(self, post: dict[str, Any], videos: list[dict[str, Any]]) -> int:
+        """1-based index of the video that shows the post's moment, or 0."""
+
 
 def build_user_message(item: dict[str, Any]) -> str:
     parts = [
@@ -173,25 +211,46 @@ def build_user_message(item: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def build_match_message(post: dict[str, Any], videos: list[dict[str, Any]]) -> str:
+    parts = [f"Post: {post['headline']}", f"Filmed moment: {post['video_moment']}", "", "Videos:"]
+    for i, v in enumerate(videos, 1):
+        desc = (v.get("description") or "").strip()
+        parts.append(f"{i}. [{v['source']}, uploaded {v.get('published_at') or 'unknown'}] {v['title']}"
+                     + (f"\n   {desc[:400]}" if desc else ""))
+    return "\n".join(parts)
+
+
+def match_index(d: dict[str, Any], count: int) -> int:
+    n = _int_or_zero(d.get("video"))
+    return n if n <= count else 0
+
+
 class ClaudeLLM:
     def __init__(self, api_key: str, model: str):
         from anthropic import AsyncAnthropic
         self.client = AsyncAnthropic(api_key=api_key, max_retries=3)
         self.model = model
 
-    async def assess(self, item: dict[str, Any]) -> Assessment:
+    async def _call(self, system: str, tool: dict[str, Any], user: str) -> dict[str, Any]:
         msg = await self.client.messages.create(
             model=self.model,
             max_tokens=600,
-            system=SYSTEM_PROMPT,
-            tools=[TOOL],
-            tool_choice={"type": "tool", "name": "submit_assessment"},
-            messages=[{"role": "user", "content": build_user_message(item)}],
+            system=system,
+            tools=[tool],
+            tool_choice={"type": "tool", "name": tool["name"]},
+            messages=[{"role": "user", "content": user}],
         )
         for block in msg.content:
             if block.type == "tool_use":
-                return Assessment.from_dict(block.input)
+                return block.input
         raise RuntimeError(f"No tool call in Claude response: {msg.content!r}")
+
+    async def assess(self, item: dict[str, Any]) -> Assessment:
+        return Assessment.from_dict(await self._call(SYSTEM_PROMPT, TOOL, build_user_message(item)))
+
+    async def match_video(self, post: dict[str, Any], videos: list[dict[str, Any]]) -> int:
+        return match_index(await self._call(MATCH_PROMPT, MATCH_TOOL, build_match_message(post, videos)),
+                           len(videos))
 
 
 class MockLLM:
@@ -215,6 +274,9 @@ class MockLLM:
             reason=f"mock: {hits} keyword hits",
         )
 
+    async def match_video(self, post: dict[str, Any], videos: list[dict[str, Any]]) -> int:
+        return 0  # the mock can't judge videos, so it never attaches one
+
 
 class LimitReached(RuntimeError):
     """The Claude subscription's usage limit is used up for now."""
@@ -234,6 +296,7 @@ class ClaudeCLILLM:
         self.cli = shutil.which(cli_path) or cli_path
         self.model, self.timeout, self.workdir = model, timeout, workdir
         self.schema = json.dumps(TOOL["input_schema"])
+        self.match_schema = json.dumps(MATCH_TOOL["input_schema"])
 
     def _env(self) -> dict[str, str]:
         import os
@@ -244,13 +307,23 @@ class ClaudeCLILLM:
         return env
 
     async def assess(self, item: dict[str, Any]) -> Assessment:
+        return Assessment.from_dict(await self._run(
+            SYSTEM_PROMPT.replace("Always answer by calling the submit_assessment tool.",
+                                  "Answer with the structured output."),
+            self.schema, build_user_message(item)))
+
+    async def match_video(self, post: dict[str, Any], videos: list[dict[str, Any]]) -> int:
+        return match_index(await self._run(
+            MATCH_PROMPT.replace("Always answer by calling the submit_match tool.",
+                                 "Answer with the structured output."),
+            self.match_schema, build_match_message(post, videos)), len(videos))
+
+    async def _run(self, system: str, schema: str, user: str) -> dict[str, Any]:
         import asyncio
         import os
         os.makedirs(self.workdir, exist_ok=True)
         args = [self.cli, "-p", "--output-format", "json", "--model", self.model, "--tools", "",
-                "--no-session-persistence", "--system-prompt", SYSTEM_PROMPT.replace(
-                    "Always answer by calling the submit_assessment tool.", "Answer with the structured output."),
-                "--json-schema", self.schema]
+                "--no-session-persistence", "--system-prompt", system, "--json-schema", schema]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -259,7 +332,7 @@ class ClaudeCLILLM:
             raise RuntimeError(f"Claude Code CLI not found ({self.cli}). Install: npm install -g @anthropic-ai/claude-code")
         try:
             out, err = await asyncio.wait_for(
-                proc.communicate(build_user_message(item).encode()), timeout=self.timeout)
+                proc.communicate(user.encode()), timeout=self.timeout)
         except asyncio.TimeoutError:
             proc.kill()
             raise RuntimeError(f"claude -p timed out after {self.timeout}s")
@@ -278,7 +351,7 @@ class ClaudeCLILLM:
             if any(w in msg.lower() for w in self.LIMIT_WORDS):
                 raise LimitReached(msg)
             raise RuntimeError(f"claude -p failed: {msg}")
-        return Assessment.from_dict(structured)
+        return structured
 
 
 class FallbackLLM:
@@ -290,10 +363,16 @@ class FallbackLLM:
         self._skip_until = 0.0
 
     async def assess(self, item: dict[str, Any]) -> Assessment:
+        return await self._call("assess", item)
+
+    async def match_video(self, post: dict[str, Any], videos: list[dict[str, Any]]) -> int:
+        return await self._call("match_video", post, videos)
+
+    async def _call(self, method: str, *args: Any) -> Any:
         import time
         if time.monotonic() >= self._skip_until:
             try:
-                return await self.primary.assess(item)
+                return await getattr(self.primary, method)(*args)
             except LimitReached as e:
                 self._skip_until = time.monotonic() + self.cooldown
                 log.warning("Subscription limit reached (%s). %s", e,
@@ -306,7 +385,7 @@ class FallbackLLM:
                 log.warning("claude -p failed (%s), using the API for this item", e)
         elif not self.fallback:
             raise LimitReached("subscription limit cooldown")
-        return await self.fallback.assess(item)
+        return await getattr(self.fallback, method)(*args)
 
 
 def llm_from_settings(s) -> LLM:

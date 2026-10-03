@@ -1,4 +1,5 @@
-"""Telegram bot for the admin: sends drafts with Publish / Edit / Reject buttons.
+"""Telegram bot for the admin: sends drafts with Publish / Edit / Reject buttons, and video replies
+(see video.py) with Publish / Reject buttons.
 
 Commands in the private chat with the bot:
   /start    show your chat id (put it in ADMIN_CHAT_ID)
@@ -20,6 +21,7 @@ from .db import DB
 log = logging.getLogger(__name__)
 
 ACTIONS = {"ap": "approve", "rj": "reject", "ed": "edit"}
+VIDEO_ACTIONS = {"va": "approve", "vr": "reject"}
 
 
 # ---------- pure logic (tested without Telegram) ----------
@@ -44,6 +46,35 @@ def apply_decision(db: DB, post_id: int, action: str, new_text: str | None = Non
         db.update_post(post_id, headline=text, status="approved")
         return True, "✏️ Edited and queued for publishing."
     return False, "Unknown action."
+
+
+def apply_video_decision(db: DB, reply_id: int, action: str) -> tuple[bool, str]:
+    reply = db.get_video_reply(reply_id)
+    if reply is None:
+        return False, "Video not found."
+    if reply["status"] != "pending_approval":
+        return False, f"Already {reply['status']}."
+    if action == "approve":
+        db.update_video_reply(reply_id, status="approved")
+        return True, "✅ Approved, will be posted as a reply."
+    if action == "reject":
+        db.update_video_reply(reply_id, status="rejected")
+        return True, "❌ Rejected."
+    return False, "Unknown action."
+
+
+def video_draft_text(db: DB, reply) -> str:
+    post, video = db.get_post(reply["post_id"]), db.get_video(reply["video_id"])
+    return "\n".join([
+        f"🎬 <b>Video for post #{post['id']}</b> · {html.escape(video['source'])}",
+        "",
+        headline_html(post["headline"]),
+        "",
+        f"Moment: {html.escape(post['video_moment'] or '')}",
+        f'Video: <a href="{html.escape(video["url"], quote=True)}">{html.escape(video["title"])}</a>',
+        "",
+        "Publish posts it as a reply under the channel post.",
+    ])
 
 
 def draft_text(db: DB, post) -> str:
@@ -89,6 +120,17 @@ def build_app(settings: Settings, db: DB, request=None):
                                      reply_markup=keyboard(post["id"]), link_preview_options=no_preview)
         db.update_post(post["id"], admin_message_id=msg.message_id)
 
+    async def send_video_draft(bot, reply) -> None:
+        buttons = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Publish", callback_data=f"va:{reply['id']}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"vr:{reply['id']}"),
+        ]])
+        video = db.get_video(reply["video_id"])
+        msg = await bot.send_message(settings.admin_chat_id, video_draft_text(db, reply), parse_mode="HTML",
+                                     reply_markup=buttons,  # the preview lets you watch it before deciding
+                                     link_preview_options=LinkPreviewOptions(url=video["url"], prefer_large_media=True))
+        db.update_video_reply(reply["id"], admin_message_id=msg.message_id)
+
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         u = update.effective_user
         await update.message.reply_text(
@@ -99,16 +141,19 @@ def build_app(settings: Settings, db: DB, request=None):
         if is_admin(update):
             s = db.stats()
             await update.message.reply_text(
-                f"Items: {s['items']}\nStories: {s['clusters']}\nPosts: {s['posts']}")
+                f"Items: {s['items']}\nStories: {s['clusters']}\nPosts: {s['posts']}\nVideo replies: {s['video_replies']}")
 
     async def cmd_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not is_admin(update):
             return
         posts = db.posts_by_status("pending_approval", 20)
-        if not posts:
+        videos = db.video_replies_by_status("pending_approval")
+        if not posts and not videos:
             await update.message.reply_text("No drafts waiting.")
         for p in posts:
             await send_draft(context.bot, p)
+        for r in videos:
+            await send_video_draft(context.bot, r)
 
     async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.user_data.pop("editing", None)
@@ -138,6 +183,17 @@ def build_app(settings: Settings, db: DB, request=None):
             await q.edit_message_text(q.message.text_html + f"\n\n<b>{result}</b>", parse_mode="HTML",
                                       link_preview_options=no_preview)
 
+    async def on_video_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        q = update.callback_query
+        if not is_admin(update):
+            await q.answer("Not allowed", show_alert=True)
+            return
+        code, _, raw_id = (q.data or "").partition(":")
+        ok, result = apply_video_decision(db, int(raw_id or 0), VIDEO_ACTIONS.get(code, ""))
+        await q.answer(result)
+        if ok:
+            await q.edit_message_text(q.message.text_html + f"\n\n<b>{result}</b>", parse_mode="HTML")
+
     async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not is_admin(update):
             return
@@ -166,20 +222,28 @@ def build_app(settings: Settings, db: DB, request=None):
     app.add_handler(CommandHandler("pending", cmd_pending))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(ap|rj|ed):\d+$"))
+    app.add_handler(CallbackQueryHandler(on_video_button, pattern=r"^(va|vr):\d+$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.bot_data["send_draft"] = send_draft
+    app.bot_data["send_video_draft"] = send_video_draft
     return app
 
 
 async def run_draft_sender(app, db: DB, settings: Settings, stop: asyncio.Event, interval: float = 3) -> None:
-    """Pushes new drafts into the admin chat."""
-    send_draft = app.bot_data["send_draft"]
+    """Pushes new drafts and video replies into the admin chat."""
+    send_draft, send_video_draft = app.bot_data["send_draft"], app.bot_data["send_video_draft"]
     while not stop.is_set():
         for post in db.unsent_drafts():
             try:
                 await send_draft(app.bot, post)
             except Exception:  # noqa: BLE001
                 log.exception("could not send draft #%s to admin chat", post["id"])
+                break
+        for reply in db.unsent_video_drafts():
+            try:
+                await send_video_draft(app.bot, reply)
+            except Exception:  # noqa: BLE001
+                log.exception("could not send video reply #%s to admin chat", reply["id"])
                 break
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
