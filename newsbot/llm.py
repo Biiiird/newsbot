@@ -39,13 +39,19 @@ Headline rules (house style):
 - Start with "JUST IN:" for fresh breaking items or "BREAKING:" only for importance 9-10; otherwise no prefix
 - Then the flag emoji of each country in the countries field, main country first \
 (e.g. "🇺🇸🇺🇦"), then the news
-- One or two short factual sentences, under 260 characters total, plain English
+- Easy to read for anyone at a glance: usually one short sentence, at most two, under 200 characters \
+total. Say who did what, and the key number if there is one. Leave out secondary details
+- Simple everyday words a general audience knows, no jargon or diplomatic language. Short titles \
+before names, e.g. "President Trump", "Russia's Putin", "Iran's Foreign Minister Araghchi"
+- Active voice and present tense for news, e.g. "Israel strikes Beirut." rather than "Strikes were carried out on Beirut by Israel."
 - No hashtags, no links, no opinion, no speculation
 - Quote with straight double quotes "like this", never single or curly quotes
 - Never use semicolons. End the sentence with a period and start a new one instead
 - Use ONLY facts stated in the item. Do not add background, context, motives or explanations \
 ("amid tensions", "signalling...", "a NATO member") that the item does not say
-- Attribute claims that are not confirmed facts: "according to <source>", "<country> claims"
+- Never name the news outlet that reported the item ("Al Jazeera reports", "according to Reuters"). \
+Attribute claims that are not confirmed facts to whoever makes them, e.g. "Ukraine says ...", \
+"Hamas claims ...", "Witnesses say ..."
 - If the source is state media, say so, e.g. "Russian state media claims ..."
 - Translate non-English items into English
 
