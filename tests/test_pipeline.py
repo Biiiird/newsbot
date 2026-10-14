@@ -145,6 +145,30 @@ async def test_stop_tasks_cancels_stuck_tasks():
     assert finished == ["quick"] and tasks[1].cancelled()
 
 
+@pytest.mark.asyncio
+async def test_pipeline_stop_start_and_remember(db, settings, monkeypatch):
+    import asyncio
+    from newsbot.runner import Pipeline
+    stops = []
+
+    def fake_tasks(self):
+        async def worker(stop=self._stop):
+            await stop.wait()
+            stops.append("worker")
+        return [asyncio.create_task(worker(), name="worker")]
+
+    monkeypatch.setattr(Pipeline, "_create_tasks", fake_tasks)
+    pipeline = Pipeline(db, settings, llm=None, targets=[])
+    assert await pipeline.start() and pipeline.running
+    assert not await pipeline.start()  # already running
+    assert await pipeline.stop() and not pipeline.running and stops == ["worker"]
+    assert db.get_state("paused") == "1"  # stopped from Telegram: stays stopped after a restart
+    assert not await pipeline.stop()
+    assert await pipeline.start() and db.get_state("paused") == "0"
+    await pipeline.stop(remember=False)  # process shutdown: runs again on the next start
+    assert db.get_state("paused") == "0"
+
+
 def test_user_message_mentions_state_media():
     msg = build_user_message({"source": "RIA", "trust": "low", "state_media": 1, "lang": "ru",
                               "title": "Заголовок", "body": "Текст новости", "item_count": 2})
@@ -203,7 +227,7 @@ def test_build_app_registers_handlers(settings, db):
     settings.telegram_bot_token = "123456:TEST-token"
     settings.admin_chat_id = "42"
     app = approval_bot.build_app(settings, db)
-    assert sum(len(h) for h in app.handlers.values()) == 8
+    assert sum(len(h) for h in app.handlers.values()) == 10
 
 
 # ---------- publisher ----------
@@ -233,6 +257,16 @@ async def test_publisher_order_and_rate_limit(db, settings):
     settings.max_posts_per_hour = 10
     assert await publisher.publish_next(db, settings, [rec])
     assert db.get_post(low)["status"] == "published" and db.get_post(high)["published_at"]
+
+
+@pytest.mark.asyncio
+async def test_publisher_expires_stale_queue(db, settings):
+    stale, fresh = _post(db, "approved", 9, "stale one"), _post(db, "approved", 7, "fresh one")
+    db.exec("UPDATE posts SET updated_at = ? WHERE id = ?", (iso(now() - timedelta(minutes=180)), stale))
+    rec = Recorder()
+    assert await publisher.publish_next(db, settings, [rec])
+    assert rec.posts == ["fresh one"]  # the stale post is skipped despite its higher score
+    assert db.get_post(stale)["status"] == "expired"
 
 
 @pytest.mark.asyncio

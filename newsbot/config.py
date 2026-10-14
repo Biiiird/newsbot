@@ -83,6 +83,7 @@ class Settings:
     rss_poll_sec: int = 60
     min_post_interval_sec: int = 120
     max_posts_per_hour: int = 12
+    max_queue_age_min: int = 120
     dedup_threshold: int = 85
     dedup_window_hours: int = 12
 
@@ -186,6 +187,7 @@ def load_settings(env_file: str | None = ".env") -> Settings:
         rss_poll_sec=_int("RSS_POLL_SEC", 60),
         min_post_interval_sec=_int("MIN_POST_INTERVAL_SEC", 120),
         max_posts_per_hour=_int("MAX_POSTS_PER_HOUR", 12),
+        max_queue_age_min=_int("MAX_QUEUE_AGE_MIN", 120),
         dedup_threshold=_int("DEDUP_THRESHOLD", 85),
         dedup_window_hours=_int("DEDUP_WINDOW_HOURS", 12),
     )

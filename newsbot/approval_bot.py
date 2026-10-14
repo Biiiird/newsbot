@@ -1,8 +1,12 @@
 """Telegram bot for the admin: sends drafts with Publish / Edit / Reject buttons, and video replies
 (see video.py) with Publish / Reject buttons.
 
+Also keeps a control panel in the admin chat with Start / Stop buttons for the news pipeline. The
+panel's "last check" time is refreshed every minute, so a time that stops moving means the server is down.
+
 Commands in the private chat with the bot:
   /start    show your chat id (put it in ADMIN_CHAT_ID)
+  /panel    control panel: start / stop the bot, server status
   /stats    counts of stories and posts
   /pending  re-send drafts still waiting for a decision
   /cancel   stop editing
@@ -12,15 +16,17 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+from datetime import datetime, timedelta
 
 from . import media
 from .publisher import headline_html
 from .config import Settings
-from .db import DB
+from .db import DB, now
 
 log = logging.getLogger(__name__)
 
 ACTIONS = {"ap": "approve", "rj": "reject", "ed": "edit"}
+PANEL_REFRESH_SEC = 60
 VIDEO_ACTIONS = {"va": "approve", "vr": "reject"}
 
 
@@ -77,6 +83,38 @@ def video_draft_text(db: DB, reply) -> str:
     ])
 
 
+def clock(dt: datetime | None = None) -> str:
+    """Server local time, e.g. "14 Oct 22:07"."""
+    return (dt or now()).astimezone().strftime("%d %b %H:%M")
+
+
+def panel_text(db: DB, running: bool, online_since: datetime) -> str:
+    posts = db.stats()["posts"]
+    bot = "▶️ running" if running else "⏸ stopped, nothing is fetched or posted"
+    return "\n".join([
+        "🤖 <b>newsbot control</b>",
+        "",
+        f"Server: 🟢 online since {clock(online_since)}",
+        f"Bot: {bot}",
+        f"Queue: {posts.get('approved', 0)} approved · {posts.get('pending_approval', 0)} drafts waiting",
+        f"Published in the last hour: {db.published_since(now() - timedelta(hours=1))}",
+        "",
+        f"<i>Last check: {clock()}. If this time stops updating, the server is offline "
+        "and the buttons won't respond.</i>",
+    ])
+
+
+def offline_text() -> str:
+    return "\n".join([
+        "🤖 <b>newsbot control</b>",
+        "",
+        f"Server: 🔴 offline since {clock()}",
+        "",
+        "The bot can't be started from Telegram until the server runs again "
+        "(<code>python -m newsbot run</code> on the computer).",
+    ])
+
+
 def draft_text(db: DB, post) -> str:
     sources = db.cluster_sources(post["cluster_id"])
     risk = "⚠️ HIGH" if post["risk"] == "high" else "low"
@@ -115,6 +153,35 @@ def build_app(settings: Settings, db: DB, request=None):
             InlineKeyboardButton("❌ Reject", callback_data=f"rj:{post_id}"),
         ]])
 
+    def panel_keyboard(running: bool):
+        toggle = (InlineKeyboardButton("⏸ Stop bot", callback_data="ctl:stop") if running
+                  else InlineKeyboardButton("▶️ Start bot", callback_data="ctl:start"))
+        return InlineKeyboardMarkup([[toggle, InlineKeyboardButton("🔄 Refresh", callback_data="ctl:refresh")]])
+
+    def render_panel():
+        pipeline = app.bot_data.get("pipeline")
+        running = bool(pipeline and pipeline.running)
+        since = app.bot_data.setdefault("online_since", now())
+        return panel_text(db, running, since), panel_keyboard(running)
+
+    async def send_panel(bot) -> None:
+        text, markup = render_panel()
+        msg = await bot.send_message(settings.admin_chat_id, text, parse_mode="HTML", reply_markup=markup)
+        db.set_state("panel_message_id", str(msg.message_id))
+
+    async def refresh_panel(bot, message_id: int | None = None) -> None:
+        """Re-draw the panel in place (the latest one unless message_id is given)."""
+        message_id = message_id or int(db.get_state("panel_message_id") or 0)
+        if not message_id:
+            return
+        text, markup = render_panel()
+        try:
+            await bot.edit_message_text(text, settings.admin_chat_id, message_id, parse_mode="HTML",
+                                        reply_markup=markup)
+        except Exception as e:  # noqa: BLE001
+            if "not modified" not in str(e).lower():  # same text within the same minute is fine
+                raise
+
     async def send_draft(bot, post) -> None:
         msg = await bot.send_message(settings.admin_chat_id, draft_text(db, post), parse_mode="HTML",
                                      reply_markup=keyboard(post["id"]), link_preview_options=no_preview)
@@ -136,6 +203,12 @@ def build_app(settings: Settings, db: DB, request=None):
         await update.message.reply_text(
             f"Your chat id: {update.effective_chat.id}\nYour user id: {u.id}\n"
             + ("You are an admin." if is_admin(update) else "Not an admin: put this id in ADMIN_CHAT_ID in .env"))
+        if is_admin(update):
+            await send_panel(context.bot)
+
+    async def cmd_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if is_admin(update):
+            await send_panel(context.bot)
 
     async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if is_admin(update):
@@ -194,12 +267,38 @@ def build_app(settings: Settings, db: DB, request=None):
         if ok:
             await q.edit_message_text(q.message.text_html + f"\n\n<b>{result}</b>", parse_mode="HTML")
 
+    async def on_control(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        q = update.callback_query
+        if not is_admin(update):
+            await q.answer("Not allowed", show_alert=True)
+            return
+        action = (q.data or "").partition(":")[2]
+        pipeline = app.bot_data.get("pipeline")
+        if action in ("start", "stop") and pipeline is None:
+            await q.answer("The pipeline isn't available in this process", show_alert=True)
+            return
+        result = None
+        if action == "start":
+            await q.answer("Starting…")
+            result = "▶️ Bot started." if await pipeline.start() else "Already running."
+        elif action == "stop":
+            await q.answer("Stopping…")  # can take a few seconds if a post is being sent
+            result = ("⏸ Bot stopped. Nothing will be fetched or posted until you press Start."
+                      if await pipeline.stop() else "Already stopped.")
+        else:
+            await q.answer("Updated")
+        db.set_state("panel_message_id", str(q.message.message_id))
+        await refresh_panel(context.bot, q.message.message_id)
+        if result:
+            await context.bot.send_message(settings.admin_chat_id, result)
+
     async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not is_admin(update):
             return
         post_id = context.user_data.get("editing")
         if not post_id:
-            await update.message.reply_text("Use the buttons under a draft. /pending shows waiting drafts.")
+            await update.message.reply_text(
+                "Use the buttons under a draft. /pending shows waiting drafts, /panel starts or stops the bot.")
             return
         ok, result = apply_decision(db, post_id, "edit", update.message.text)
         if ok:
@@ -218,14 +317,18 @@ def build_app(settings: Settings, db: DB, request=None):
     app = builder.build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("whoami", cmd_start))
+    app.add_handler(CommandHandler("panel", cmd_panel))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("pending", cmd_pending))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(ap|rj|ed):\d+$"))
     app.add_handler(CallbackQueryHandler(on_video_button, pattern=r"^(va|vr):\d+$"))
+    app.add_handler(CallbackQueryHandler(on_control, pattern=r"^ctl:(start|stop|refresh)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.bot_data["send_draft"] = send_draft
     app.bot_data["send_video_draft"] = send_video_draft
+    app.bot_data["send_panel"] = send_panel
+    app.bot_data["refresh_panel"] = refresh_panel
     return app
 
 
@@ -249,3 +352,42 @@ async def run_draft_sender(app, db: DB, settings: Settings, stop: asyncio.Event,
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
             pass
+
+
+async def run_panel(app, db: DB, settings: Settings, stop: asyncio.Event,
+                    interval: float = PANEL_REFRESH_SEC) -> None:
+    """Posts a fresh control panel when the server comes online, then keeps its "last check" time current."""
+    from telegram import BotCommand
+    try:
+        await app.bot.set_my_commands([
+            BotCommand("panel", "Start / stop the bot, server status"),
+            BotCommand("pending", "Re-send drafts waiting for a decision"),
+            BotCommand("stats", "Counts of stories and posts"),
+        ])
+        await app.bot_data["send_panel"](app.bot)
+    except Exception:  # noqa: BLE001
+        log.exception("could not send the control panel")
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop.is_set():
+            break
+        try:
+            await app.bot_data["refresh_panel"](app.bot)
+        except Exception as e:  # noqa: BLE001  panel deleted, network blip: try again next time
+            log.debug("panel refresh failed: %s", e)
+
+
+async def announce_offline(app, db: DB, settings: Settings) -> None:
+    """On shutdown: mark the panel offline (removing its buttons) and send a notification."""
+    message_id = int(db.get_state("panel_message_id") or 0)
+    try:
+        if message_id:
+            await app.bot.edit_message_text(offline_text(), settings.admin_chat_id, message_id, parse_mode="HTML")
+        await app.bot.send_message(settings.admin_chat_id,
+                                   f"🔴 newsbot server shut down at {clock()}. Start/Stop won't work until "
+                                   "it runs again on the computer.")
+    except Exception:  # noqa: BLE001
+        log.exception("could not announce shutdown in the admin chat")

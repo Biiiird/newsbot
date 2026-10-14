@@ -29,6 +29,11 @@ smaller regional conflicts
 - 0-4: local crime, accidents and disasters without political or international impact, human-interest, \
 culture, sport, weather, health (unless an international emergency), opinion, analysis pieces, features, ads \
 -> set is_news=false if it is not news at all
+Be strict: the channel posts only the most influential stories of the day. Ask whether people \
+outside the country involved will care. Most items are 5-7. Give 8 only to news with clear \
+international impact (a government or leader changing course on a war, a major deal or sanctions, \
+a significant attack or military move, a market-moving decision), a few times a day at most. \
+Domestic reviews, inquiries, statements without new action, follow-ups and reactions are 6 or lower.
 
 Risk:
 - "high" if the item involves casualties, military claims, attacks, accusations against named people, \

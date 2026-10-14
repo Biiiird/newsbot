@@ -161,6 +161,10 @@ def wait_seconds(db: DB, settings: Settings) -> float:
 
 async def publish_next(db: DB, settings: Settings, targets: list[Target], notify: Notify | None = None) -> bool:
     """Publish the next approved post if rate limits allow. Returns True if something was published."""
+    expired = db.expire_approved(now() - timedelta(minutes=settings.max_queue_age_min))
+    if expired:
+        log.info("expired %s queued post(s), older than %s min: %s", len(expired), settings.max_queue_age_min,
+                 ", ".join(f"#{i}" for i in expired))
     post = db.next_approved()
     if post is None or wait_seconds(db, settings) > 0:
         return False

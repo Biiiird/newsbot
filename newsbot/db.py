@@ -4,6 +4,7 @@ Post lifecycle (posts.status):
     pending_approval -> approved -> published
                      -> rejected
     approved -> failed (publishing error)
+             -> expired (waited in the queue longer than MAX_QUEUE_AGE_MIN)
 
 Video replies (video_replies.status) follow the same lifecycle, see video.py.
 """
@@ -104,7 +105,7 @@ CREATE TABLE IF NOT EXISTS video_replies (
     id                INTEGER PRIMARY KEY,
     post_id           INTEGER NOT NULL UNIQUE REFERENCES posts(id),
     video_id          INTEGER NOT NULL REFERENCES videos(id),
-    status            TEXT NOT NULL,             -- pending_approval | approved | published | rejected | failed
+    status            TEXT NOT NULL,             -- pending_approval | approved | published | rejected | failed | expired
     admin_message_id  INTEGER,
     external_id       TEXT,
     error             TEXT,
@@ -112,6 +113,12 @@ CREATE TABLE IF NOT EXISTS video_replies (
     updated_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_video_replies_status ON video_replies(status);
+
+-- small key/value settings changed at runtime, e.g. whether the pipeline is paused
+CREATE TABLE IF NOT EXISTS state (
+    key    TEXT PRIMARY KEY,
+    value  TEXT
+);
 """
 
 
@@ -161,6 +168,14 @@ class DB:
         cur = self.conn.execute(sql, args)
         self.conn.commit()
         return cur.lastrowid
+
+    def get_state(self, key: str, default: str | None = None) -> str | None:
+        row = self.one("SELECT value FROM state WHERE key = ?", (key,))
+        return row["value"] if row else default
+
+    def set_state(self, key: str, value: str | None) -> None:
+        self.exec("INSERT INTO state (key, value) VALUES (?, ?) "
+                  "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
     # ---------- items / clusters ----------
     def hash_exists(self, h: str) -> bool:
@@ -256,6 +271,14 @@ class DB:
         return self.one(
             """SELECT * FROM posts WHERE status = 'approved' AND (retry_after IS NULL OR retry_after <= ?)
                ORDER BY importance DESC, id LIMIT 1""", (iso(),))
+
+    def expire_approved(self, approved_before: datetime) -> list[int]:
+        """Expire approved posts that have waited in the queue since before `approved_before`."""
+        ids = [r["id"] for r in self.q(
+            "SELECT id FROM posts WHERE status = 'approved' AND updated_at < ?", (iso(approved_before),))]
+        for post_id in ids:
+            self.update_post(post_id, status="expired")
+        return ids
 
     def failed_attempts(self, post_id: int) -> int:
         return int(self.one("SELECT COUNT(*) AS n FROM publish_log WHERE post_id = ? AND ok = 0",

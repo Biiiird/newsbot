@@ -113,7 +113,8 @@ async def test_reject_and_start(bot_env, db):
     await app.process_update(_callback(app, f"rj:{pid}"))
     assert db.get_post(pid)["status"] == "rejected"
     await app.process_update(_text(app, "/start"))
-    assert "Your chat id: 4242" in fake.sent("sendMessage")[-1]["text"]
+    assert "Your chat id: 4242" in fake.sent("sendMessage")[-2]["text"]
+    assert "newsbot control" in fake.sent("sendMessage")[-1]["text"]  # admins also get the control panel
 
 
 async def test_video_draft_sent_then_approved(bot_env, db):
@@ -130,3 +131,51 @@ async def test_video_draft_sent_then_approved(bot_env, db):
     await app.process_update(_callback(app, f"va:{rid}"))
     assert db.get_video_reply(rid)["status"] == "approved"
     assert "Approved" in fake.sent("editMessageText")[0]["text"]
+
+
+class FakePipeline:
+    def __init__(self, running=True):
+        self.running = running
+
+    async def start(self):
+        changed, self.running = not self.running, True
+        return changed
+
+    async def stop(self):
+        changed, self.running = self.running, False
+        return changed
+
+
+async def test_control_panel_stop_and_start(bot_env, db):
+    app, fake = bot_env
+    app.bot_data["pipeline"] = pipeline = FakePipeline()
+    await app.process_update(_text(app, "/panel"))
+    panel = fake.sent("sendMessage")[-1]
+    assert "🟢 online" in panel["text"] and "▶️ running" in panel["text"]
+    assert "ctl:stop" in json.dumps(panel["reply_markup"])
+
+    await app.process_update(_callback(app, "ctl:stop", message_id=101))
+    assert not pipeline.running
+    edited = fake.sent("editMessageText")[-1]
+    assert "⏸ stopped" in edited["text"] and "ctl:start" in json.dumps(edited["reply_markup"])
+    assert "Bot stopped" in fake.sent("sendMessage")[-1]["text"]
+    assert db.get_state("panel_message_id") == "101"
+
+    await app.process_update(_callback(app, "ctl:start", message_id=101))
+    assert pipeline.running and "Bot started" in fake.sent("sendMessage")[-1]["text"]
+
+
+async def test_non_admin_cannot_stop(bot_env, db):
+    app, fake = bot_env
+    app.bot_data["pipeline"] = pipeline = FakePipeline()
+    await app.process_update(_callback(app, "ctl:stop", user={"id": 999, "is_bot": False, "first_name": "X"}))
+    assert pipeline.running and fake.sent("answerCallbackQuery")[0]["text"] == "Not allowed"
+
+
+async def test_offline_announcement(bot_env, db, settings):
+    app, fake = bot_env
+    db.set_state("panel_message_id", "77")
+    await approval_bot.announce_offline(app, db, settings)
+    edited = fake.sent("editMessageText")[-1]
+    assert edited["message_id"] == 77 and "🔴 offline" in edited["text"] and "reply_markup" not in edited
+    assert "shut down" in fake.sent("sendMessage")[-1]["text"]
