@@ -73,6 +73,8 @@ Bot commands: `/pending` re-sends the waiting drafts, `/stats` shows counts, `/c
 2. Add channels under `telegram:` in `config/sources.yaml`.
 3. Run `python -m newsbot telegram-login` once. It asks for a phone number and code, and the session is saved to `data/`. Use a separate account, not your personal one.
 
+`config/sources.yaml` already lists fast aggregator channels (BRICS News, Watcher Guru, Insider Paper, Clash Report and others) and TASS. They have trust `low`: their stories always come to you as drafts, even with `AUTO_POST=true`, because these channels also post unverified claims. The same goes for state-media RSS feeds such as Global Times and Press TV.
+
 ## 5. X (optional)
 
 You need a developer account with a write-capable API tier (check current pricing on developer.x.com). Create an app with read+write permissions, generate user access tokens, fill in the `X_*` values in `.env` and set `X_ENABLED=true`. The source link goes in a reply, not the main post.

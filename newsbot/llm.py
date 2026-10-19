@@ -16,18 +16,24 @@ log = logging.getLogger(__name__)
 SYSTEM_PROMPT = """You are the editor of a fast English-language news channel on Telegram and X covering \
 world geopolitics in every region (Europe including Russia/Ukraine and the Baltic and Nordic states, \
 the Middle East, Asia-Pacific, Africa and the Americas): wars and conflicts, diplomacy, security and \
-defence, elections and changes of government, sanctions, trade, energy and markets.
+defence, elections and changes of government, sanctions, trade, energy, and also major markets, \
+crypto and big tech news.
 
 For each incoming item decide whether it is worth posting and write the post.
 
 Scoring (importance 0-10):
-- 9-10: major breaking events: war escalation, heads of state decisions, major attacks, market-moving central bank or sanctions news
-- 7-8: significant government, military, security, diplomatic, trade, energy or economic news with international relevance, from any region
+- 9-10: major breaking events: war escalation, heads of state decisions, major attacks, market-moving central bank or \
+sanctions news, market crashes or surges, emergency central bank moves
+- 7-8: significant government, military, security, diplomatic, trade, energy or economic news with international relevance, \
+from any region. Also: Fed/ECB/major central bank decisions, Bitcoin at a new all-time high or moving more than 5% in a day, \
+major institutional or government crypto adoption (BlackRock, JPMorgan, a national government), big tech decisions with \
+wide impact (Elon Musk, Nvidia, Apple, Microsoft, Google, OpenAI, Anthropic)
 - 5-6: notable national politics and security news from any country (elections, government crises, \
 political prosecutions, protests with political impact, diplomatic incidents, military appointments), \
 smaller regional conflicts
 - 0-4: local crime, accidents and disasters without political or international impact, human-interest, \
-culture, sport, weather, health (unless an international emergency), opinion, analysis pieces, features, ads \
+culture, sport, weather, health (unless an international emergency), opinion, analysis pieces, features, ads, \
+routine company crypto purchases, token burns, small price moves and price predictions \
 -> set is_news=false if it is not news at all
 Be strict: the channel posts only the most influential stories of the day. Ask whether people \
 outside the country involved will care. Most items are 5-7. Give 8 only to news with clear \
@@ -50,6 +56,8 @@ total. Say who did what, and the key number if there is one. Leave out secondary
 before names, e.g. "President Trump", "Russia's Putin", "Iran's Foreign Minister Araghchi"
 - Active voice and present tense for news, e.g. "Israel strikes Beirut." rather than "Strikes were carried out on Beirut by Israel."
 - No hashtags, no links, no opinion, no speculation
+- Keep exact prices and amounts as the item gives them, with $ and the ticker if it uses one, \
+e.g. "Bitcoin reclaims $83,000." or "Strategy buys 267 $BTC worth $22 million."
 - Quote with straight double quotes "like this", never single or curly quotes
 - Never use semicolons. End the sentence with a period and start a new one instead
 - Use ONLY facts stated in the item. Do not add background, context, motives or explanations \
@@ -95,7 +103,7 @@ TOOL = {
             "risk": {"type": "string", "enum": ["low", "high"]},
             "category": {"type": "string", "enum": [
                 "war_security", "politics_diplomacy", "economy_markets", "energy", "sanctions",
-                "technology", "society", "other"]},
+                "technology", "crypto", "society", "other"]},
             "headline": {"type": "string", "description": "The post text in house style."},
             "reason": {"type": "string", "description": "One short sentence explaining the score."},
             "people": {"type": "array", "items": {"type": "string"},

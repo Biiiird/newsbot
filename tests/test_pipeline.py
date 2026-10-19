@@ -31,8 +31,9 @@ def test_route(settings):
     assert route(A(), "medium", settings) == "pending_approval"
     assert route(A(importance=7), "high", settings) == "pending_approval"
     settings.auto_require_low_risk = settings.auto_require_high_trust = False
-    assert route(A(risk="high"), "low", settings) == "approved"
-    assert route(A(importance=7), "low", settings) == "pending_approval"
+    assert route(A(risk="high"), "medium", settings) == "approved"
+    assert route(A(importance=7), "medium", settings) == "pending_approval"
+    assert route(A(importance=10), "low", settings) == "pending_approval"  # aggregators: always checked
 
 
 # ---------- processor ----------
@@ -387,3 +388,15 @@ async def test_on_published_runs_after_publish_and_cannot_break_it(db, settings)
 
     assert await publisher.publish_next(db, settings, [Recorder()], on_published=on_published)
     assert seen == ["published"] and db.get_post(pid)["status"] == "published"
+
+
+@pytest.mark.asyncio
+async def test_stories_left_waiting_too_long_are_not_scored(db, settings, high):
+    store_item(db, settings, high, "Story queued before the bot was stopped for days", url="old", published_at=now())
+    store_item(db, settings, high, "Story that just came in a minute ago from the feed", url="new", published_at=now())
+    old_id = db.new_clusters()[0]["cluster_id"]
+    db.exec("UPDATE clusters SET first_seen = ? WHERE id = ?", (iso(now() - timedelta(days=3)), old_id))
+    llm = FakeLLM([A(importance=9)])
+    counts = await process_once(db, settings, llm)
+    assert counts == {"stale": 1, "pending_approval": 1}
+    assert [i["title"] for i in llm.seen] == ["Story that just came in a minute ago from the feed"]

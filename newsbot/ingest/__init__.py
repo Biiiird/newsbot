@@ -25,6 +25,8 @@ def store_item(db: DB, settings: Settings, source: Source, title: str, body: str
                url: str | None = None, published_at: datetime | None = None) -> str:
     """Normalize, dedup and save one item.
     Returns 'duplicate', 'joined' (added to an existing story), 'new' or 'stale'."""
+    if published_at and published_at > now() + timedelta(minutes=15):
+        published_at = now()  # a feed with a wrong clock must not dodge the age filter
     title = clean(title)[:300]
     body = clean(body)[:4000]
     if not title:

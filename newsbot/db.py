@@ -178,6 +178,9 @@ class DB:
                   "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
     # ---------- items / clusters ----------
+    def source_seen(self, source: str) -> bool:
+        return self.one("SELECT 1 FROM items WHERE source = ? LIMIT 1", (source,)) is not None
+
     def hash_exists(self, h: str) -> bool:
         return self.one("SELECT 1 FROM items WHERE hash = ?", (h,)) is not None
 
@@ -217,7 +220,7 @@ class DB:
 
     def new_clusters(self, limit: int = 20) -> list[sqlite3.Row]:
         return self.q(
-            """SELECT c.id AS cluster_id, c.item_count, i.*
+            """SELECT c.id AS cluster_id, c.item_count, c.first_seen, i.*
                FROM clusters c JOIN items i ON i.id = c.lead_item_id
                WHERE c.status = 'new' ORDER BY c.id LIMIT ?""",
             (limit,),

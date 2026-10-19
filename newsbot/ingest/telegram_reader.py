@@ -8,17 +8,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from ..config import Settings, Source
 from ..db import DB
 from . import store_item, to_utc
 
 log = logging.getLogger(__name__)
+# what news aggregators put around every post: "JUST IN: 🇺🇸🇨🇳 ..." and a closing "@BRICSNews"
+_LEAD = re.compile(r"^\s*(?:(?:JUST IN|BREAKING|NEW|UPDATE)\s*:\s*)?[\U0001F1E6-\U0001F1FF\s]*", re.I)
+_SIGNATURE = re.compile(r"(?:\n\s*)+@\w+\s*$")
 
 
 def split_message(text: str) -> tuple[str, str]:
     """Telegram posts have no title: use the first line (or first sentence) as the headline."""
-    text = text.strip()
+    text = _LEAD.sub("", _SIGNATURE.sub("", text.strip()), count=1).strip()
     first_line = text.split("\n", 1)[0].strip()
     if len(first_line) > 220:
         cut = first_line.find(". ", 40, 220)

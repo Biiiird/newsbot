@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
+from datetime import timedelta
 
 from .config import Settings
-from .db import DB
+from .db import DB, now, parse_iso
 from .llm import LLM, Assessment, LimitReached
 from .media import MediaResolver
 
@@ -24,6 +25,8 @@ def route(a: Assessment, trust: str, settings: Settings) -> str:
     """Return 'dropped', 'pending_approval' or 'approved'."""
     if not a.is_news or a.importance < settings.min_importance or not a.headline:
         return "dropped"
+    if trust == "low":  # aggregators and state media: always checked by a human first
+        return "pending_approval"
     if (settings.auto_post and a.importance >= settings.auto_min_importance
             and (a.risk == "low" or not settings.auto_require_low_risk)
             and (trust == "high" or not settings.auto_require_high_trust)):
@@ -39,6 +42,11 @@ async def process_once(db: DB, settings: Settings, llm: LLM, limit: int = 10,
             break  # shutting down: the rest stay 'new' for the next run
         item = dict(row)
         cid = item["cluster_id"]
+        seen = parse_iso(item["first_seen"])
+        if seen and seen < now() - timedelta(minutes=settings.max_item_age_min):
+            db.set_cluster(cid, "stale")  # waited too long (bot stopped, usage limit): old news now
+            counts["stale"] += 1
+            continue
         recent = [dict(p) for p in db.recent_posts(settings.dedup_window_hours)]
         item["recent_posts"] = recent
         try:

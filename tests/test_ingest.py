@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 from email.utils import format_datetime
 
 import httpx
@@ -94,3 +94,70 @@ async def test_poll_once_with_mock_http(db, settings):
     assert row["title"].startswith("NATO jets")
     assert row["body"] == "Details"
     assert row["url"] == "https://err/1"
+
+
+def test_split_message_strips_aggregator_wrapping():
+    title, body = split_message('JUST IN: 🇺🇸🇨🇳 Trump administration bans DeepSeek on government devices.\n\n@BRICSNews')
+    assert title == "Trump administration bans DeepSeek on government devices."
+    assert "@BRICSNews" not in body
+    title, _ = split_message("BREAKING: Bitcoin reclaims $83,000\n\n@WatcherGuru")
+    assert title == "Bitcoin reclaims $83,000"
+
+
+def test_due_sources_respects_every_sec():
+    from newsbot.config import Source
+    from types import SimpleNamespace
+    fast = Source(name="fast", kind="rss", url="https://a")
+    slow = Source(name="slow", kind="rss", url="https://b", every_sec=180)
+    s = SimpleNamespace(rss_sources=[fast, slow])
+    assert rss.due_sources(s, {}, 1000) == [fast, slow]
+    assert rss.due_sources(s, {"fast": 990, "slow": 990}, 1000) == [fast]  # slow polled 10s ago
+    assert rss.due_sources(s, {"fast": 990, "slow": 800}, 1000) == [fast, slow]
+
+
+@pytest.mark.asyncio
+async def test_google_titles_and_clock_offset(db, settings):
+    from newsbot.config import Source
+    t = now()
+    google = Source(name="Reuters", kind="rss", trust="high",
+                    url="https://news.google.com/rss/search?q=source:Reuters")
+    beijing = Source(name="Global Times", kind="rss", url="https://gt/rss", clock_offset_hours=-8)
+    feeds = {
+        google.url: _feed([("Fed holds rates steady as inflation cools - Reuters", "https://g/1", "x", t)]),
+        beijing.url: _feed([("China and Iran sign energy deal", "https://gt/1", "x", t + timedelta(hours=8))]),
+    }
+    handler = lambda request: httpx.Response(200, text=feeds[str(request.url)])  # noqa: E731
+    settings.sources = [google, beijing]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert await rss.poll_once(db, settings, client) == {"new": 2}
+    titles = {r["title"]: r["published_at"] for r in db.new_clusters()}
+    assert "Fed holds rates steady as inflation cools" in titles
+    gt = titles["China and Iran sign energy deal"]
+    assert abs((datetime.fromisoformat(gt) - t).total_seconds()) < 5  # shifted back to real time
+
+
+def test_future_dates_cannot_dodge_the_age_filter(db, settings):
+    from newsbot.config import Source
+    src = Source(name="Odd clock", kind="rss")
+    store_item(db, settings, src, "Some story with a date far in the future", "", "https://x/1",
+               now() + timedelta(hours=8))
+    stored = db.new_clusters()[0]["published_at"]
+    assert datetime.fromisoformat(stored) <= now() + timedelta(seconds=5)
+
+
+@pytest.mark.asyncio
+async def test_new_feed_undated_backlog_is_not_news(db, settings):
+    from newsbot.config import Source
+    src = Source(name="Undated", kind="rss", url="https://u/rss")
+    items = ["Iran and China sign a new trade agreement", "Tehran hosts regional security conference"]
+    body = "".join(f"<item><title>{t}</title><link>https://u/{i}</link></item>" for i, t in enumerate(items))
+
+    def handler(request):
+        return httpx.Response(200, text=f'<?xml version="1.0"?><rss version="2.0"><channel>{body}</channel></rss>')
+
+    settings.sources = [src]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert await rss.poll_once(db, settings, client) == {"stale": 2}  # first poll: backlog
+        items.append("Iran announces new oil export deal with India")
+        body += "<item><title>Iran announces new oil export deal with India</title><link>https://u/9</link></item>"
+        assert await rss.poll_once(db, settings, client) == {"duplicate": 2, "new": 1}  # later: undated is new

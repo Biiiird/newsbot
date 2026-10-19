@@ -2,6 +2,8 @@
 #        medium -> always goes to approval
 #        low    -> always goes to approval, headline must attribute the claim
 # lang is a hint for the model; it translates everything to English.
+# Optional for rss: every_sec polls a feed at most this often (default: every RSS_POLL_SEC),
+# clock_offset_hours corrects feeds that mislabel their time zone (e.g. -8 for Beijing time sent as GMT).
 
 rss:
   - name: ERR News
@@ -69,6 +71,64 @@ rss:
     trust: medium
     lang: en
 
+  # Wire services have no public RSS any more: read them through Google News, every 3 min to stay
+  # under Google's rate limits. Links go through a Google redirect.
+  - name: Reuters
+    url: https://news.google.com/rss/search?q=site:reuters.com+when:1h&hl=en-US&gl=US&ceid=US:en
+    trust: high
+    lang: en
+    every_sec: 180
+  - name: Bloomberg
+    url: https://news.google.com/rss/search?q=site:bloomberg.com+when:1h&hl=en-US&gl=US&ceid=US:en
+    trust: high
+    lang: en
+    every_sec: 180
+  - name: AP
+    url: https://news.google.com/rss/search?q=site:apnews.com+when:1h&hl=en-US&gl=US&ceid=US:en
+    trust: high
+    lang: en
+    every_sec: 180
+
+  # Governments: statements as they are published
+  - name: White House
+    url: https://www.whitehouse.gov/news/feed/
+    trust: high
+    lang: en
+  - name: Kremlin
+    url: http://en.kremlin.ru/events/president/news/feed
+    trust: high
+    lang: en
+
+  - name: Anadolu
+    url: https://www.aa.com.tr/en/rss/default?cat=world
+    trust: medium
+    lang: en
+  - name: Financial Times
+    url: https://www.ft.com/world?format=rss
+    trust: medium
+    lang: en
+  - name: Times of India
+    url: https://timesofindia.indiatimes.com/rssfeeds/296589292.cms
+    trust: medium
+    lang: en
+  - name: CoinDesk
+    url: https://www.coindesk.com/arc/outboundfeeds/rss/
+    trust: medium
+    lang: en
+
+  # State media: always needs your approval, posts say "Chinese/Iranian state media claims ..."
+  - name: Global Times
+    url: https://www.globaltimes.cn/rss/outbrain.xml
+    trust: low
+    lang: en
+    state_media: true
+    clock_offset_hours: -8  # sends Beijing time labelled as GMT
+  - name: Press TV
+    url: https://www.presstv.ir/rss.xml
+    trust: low
+    lang: en
+    state_media: true
+
 # Public Telegram channels, read in real time through a user account (needs TG_API_ID / TG_API_HASH
 # and a one-time `python -m newsbot telegram-login`). Use the @username of the channel.
 # Official video channels. When a post is about a speech, briefing or interview, the matching upload
@@ -92,3 +152,34 @@ telegram:
   #   trust: low
   #   lang: ru
   #   state_media: true   # headline will say "Russian state media claims..."
+  # Fast news aggregators (BRICS News style). Trust low: their stories always come to you as drafts,
+  # because they post unverified claims too.
+  - name: BRICS News
+    handle: "@BRICSNews"
+    trust: low
+    lang: en
+  - name: Watcher Guru
+    handle: "@WatcherGuru"
+    trust: low
+    lang: en
+  - name: Insider Paper
+    handle: "@insiderpaper"
+    trust: low
+    lang: en
+  - name: Clash Report
+    handle: "@clashreport"
+    trust: low
+    lang: en
+  - name: Disclose.tv
+    handle: "@disclosetv"
+    trust: low
+    lang: en
+  - name: Walter Bloomberg
+    handle: "@walterbloomberg"   # market headlines, not run by Bloomberg
+    trust: low
+    lang: en
+  - name: TASS
+    handle: "@tass_agency"
+    trust: low
+    lang: ru
+    state_media: true

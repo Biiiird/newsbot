@@ -34,6 +34,8 @@ class Source:
     url: str = ""  # rss
     handle: str = ""  # telegram
     state_media: bool = False
+    every_sec: int = 0  # rss: poll this feed at most this often (0 = every RSS_POLL_SEC)
+    clock_offset_hours: float = 0  # rss: added to the feed's dates, for feeds that mislabel their time zone
 
 
 @dataclass
@@ -125,6 +127,8 @@ def load_sources(path: str) -> list[Source]:
             name=entry["name"], kind="rss", url=entry["url"],
             trust=entry.get("trust", "medium"), lang=entry.get("lang", "en"),
             state_media=bool(entry.get("state_media", False)),
+            every_sec=int(entry.get("every_sec", 0)),
+            clock_offset_hours=float(entry.get("clock_offset_hours", 0)),
         ))
     for entry in data.get("telegram") or []:
         handle = entry["handle"].strip()
