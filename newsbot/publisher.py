@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+from urllib.parse import quote, urlencode
 from datetime import timedelta
-from typing import Awaitable, Callable, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 
 from . import media
 from .config import Settings
@@ -14,6 +15,7 @@ from .db import DB, iso, now
 
 log = logging.getLogger(__name__)
 Notify = Callable[[str], Awaitable[None]]
+OnPublished = Callable[[Any], Awaitable[None]]  # gets the published post row
 CAPTION_LIMIT = 1024  # Telegram's limit for photo captions (plain messages allow 4096)
 RETRY_DELAYS = (30, 60, 120, 240, 480)  # seconds to wait after each network failure, then give up
 
@@ -53,6 +55,28 @@ def telegram_text(post, include_source: bool) -> str:
     if include_source and post["source_url"]:
         text += f'\n\nSource: <a href="{html.escape(post["source_url"], quote=True)}">{html.escape(post["source_name"] or "link")}</a>'
     return text
+
+
+def x_length(text: str) -> int:
+    """Length as X counts it: most emoji and CJK characters count as 2, a flag (two regional
+    indicator letters) as 2, invisible joiners and variation selectors as 0."""
+    n = 0
+    for ch in text:
+        cp = ord(ch)
+        if cp in (0x200D, 0xFE0F) or 0xFE00 <= cp <= 0xFE0E:
+            continue
+        if 0x1F1E6 <= cp <= 0x1F1FF:  # half of a flag
+            n += 1
+        elif cp <= 0x10FF or 0x2000 <= cp <= 0x200C or 0x2010 <= cp <= 0x201F or 0x2032 <= cp <= 0x2037:
+            n += 1
+        else:
+            n += 2
+    return n
+
+
+def x_intent_url(text: str) -> str:
+    """Link that opens X's composer with the text filled in (no API, no cost)."""
+    return "https://x.com/intent/post?" + urlencode({"text": text}, quote_via=quote)
 
 
 def caption_fits(post, include_source: bool) -> bool:
@@ -159,7 +183,8 @@ def wait_seconds(db: DB, settings: Settings) -> float:
     return 0.0
 
 
-async def publish_next(db: DB, settings: Settings, targets: list[Target], notify: Notify | None = None) -> bool:
+async def publish_next(db: DB, settings: Settings, targets: list[Target], notify: Notify | None = None,
+                       on_published: OnPublished | None = None) -> bool:
     """Publish the next approved post if rate limits allow. Returns True if something was published."""
     expired = db.expire_approved(now() - timedelta(minutes=settings.max_queue_age_min))
     if expired:
@@ -199,15 +224,20 @@ async def publish_next(db: DB, settings: Settings, targets: list[Target], notify
     log.info("published #%s to %s", post["id"], ", ".join(t.name for t in targets))
     if notify and errors:
         await notify(f"⚠️ Post #{post['id']} published, but some targets failed:\n{'; '.join(errors)[:500]}")
+    if on_published:
+        try:
+            await on_published(db.get_post(post["id"]))
+        except Exception:  # noqa: BLE001  the post is out, a failed follow-up must not undo that
+            log.exception("after-publish step failed for post #%s", post["id"])
     return True
 
 
 async def run(db: DB, settings: Settings, targets: list[Target], stop: asyncio.Event,
-              notify: Notify | None = None, interval: float = 5) -> None:
+              notify: Notify | None = None, interval: float = 5, on_published: OnPublished | None = None) -> None:
     log.info("Publisher running -> %s", ", ".join(t.name for t in targets))
     while not stop.is_set():
         try:
-            await publish_next(db, settings, targets, notify)
+            await publish_next(db, settings, targets, notify, on_published)
         except Exception:  # noqa: BLE001
             log.exception("publisher loop error")
         try:

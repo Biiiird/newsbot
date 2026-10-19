@@ -11,7 +11,7 @@ from .config import Settings
 from .db import DB
 from .ingest import rss, telegram_reader
 from .llm import llm_from_settings
-from .publisher import Notify
+from .publisher import Notify, OnPublished
 
 log = logging.getLogger(__name__)
 SHUTDOWN_GRACE_SEC = 10
@@ -31,8 +31,10 @@ class Pipeline:
     """The news workers (RSS, Telegram reader, processor, publisher, video replies), which the admin can
     stop and start from Telegram while the process keeps running. Stopped survives a restart."""
 
-    def __init__(self, db: DB, settings: Settings, llm, targets: list, bot=None, notify: Notify | None = None):
+    def __init__(self, db: DB, settings: Settings, llm, targets: list, bot=None, notify: Notify | None = None,
+                 on_published: OnPublished | None = None):
         self.db, self.settings, self.llm, self.targets, self.bot, self.notify = db, settings, llm, targets, bot, notify
+        self.on_published = on_published
         self.tasks: list[asyncio.Task] = []
         self._stop = asyncio.Event()
         self._lock = asyncio.Lock()
@@ -46,7 +48,7 @@ class Pipeline:
         tasks = [
             asyncio.create_task(rss.run(db, s, stop), name="rss"),
             asyncio.create_task(processor.run(db, s, self.llm, stop), name="processor"),
-            asyncio.create_task(publisher.run(db, s, self.targets, stop, self.notify), name="publisher"),
+            asyncio.create_task(publisher.run(db, s, self.targets, stop, self.notify, on_published=self.on_published), name="publisher"),
         ]
         if s.video_enabled:
             tasks.append(asyncio.create_task(video.run(db, s, self.llm, self.bot, stop), name="video"))
@@ -108,7 +110,11 @@ async def run_all(settings: Settings) -> None:
                     "with `python -m newsbot list` and `python -m newsbot approve <id>`")
 
     targets = publisher.build_targets(settings, app.bot if app else None)
-    pipeline = Pipeline(db, settings, llm, targets, app.bot if app else None, notify)
+    on_published = None
+    if app and settings.x_handoff:  # "Ready for X" message with Post on X / Copy text buttons
+        async def on_published(post) -> None:
+            await app.bot_data["send_x_handoff"](app.bot, post)
+    pipeline = Pipeline(db, settings, llm, targets, app.bot if app else None, notify, on_published)
     tasks = []
     if app:
         app.bot_data["pipeline"] = pipeline

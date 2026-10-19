@@ -367,3 +367,23 @@ def test_load_settings(tmp_path, monkeypatch):
     assert [x.name for x in s.rss_sources] == ["A"]
     assert s.telegram_sources[0].name == "@b" and s.telegram_sources[0].state_media
     assert not s.telegram_reader_enabled
+
+
+def test_x_length_counts_like_x():
+    assert publisher.x_length("abc") == 3
+    assert publisher.x_length("🇺🇸") == 2  # a flag counts as one emoji
+    assert publisher.x_length("👍🏽") == 4
+    assert publisher.x_length("“quote” — ok") == 12
+
+
+@pytest.mark.asyncio
+async def test_on_published_runs_after_publish_and_cannot_break_it(db, settings):
+    pid = _post(db, "approved", 8, "x")
+    seen = []
+
+    async def on_published(post):
+        seen.append(post["status"])
+        raise RuntimeError("telegram down")
+
+    assert await publisher.publish_next(db, settings, [Recorder()], on_published=on_published)
+    assert seen == ["published"] and db.get_post(pid)["status"] == "published"

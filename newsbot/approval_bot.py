@@ -19,7 +19,7 @@ import logging
 from datetime import datetime, timedelta
 
 from . import media
-from .publisher import headline_html
+from .publisher import headline_html, x_intent_url, x_length
 from .config import Settings
 from .db import DB, now
 
@@ -115,6 +115,18 @@ def offline_text() -> str:
     ])
 
 
+X_MAX = 280
+COPY_MAX = 256  # Telegram's limit for a copy-to-clipboard button
+
+
+def x_handoff_text(post) -> str:
+    lines = ["📤 <b>Ready for X</b>", "", html.escape(post["headline"])]
+    over = x_length(post["headline"]) - X_MAX
+    if over > 0:
+        lines += ["", f"⚠️ {over} characters over X's {X_MAX} limit, shorten it before posting."]
+    return "\n".join(lines)
+
+
 def draft_text(db: DB, post) -> str:
     sources = db.cluster_sources(post["cluster_id"])
     risk = "⚠️ HIGH" if post["risk"] == "high" else "low"
@@ -136,7 +148,7 @@ def draft_text(db: DB, post) -> str:
 
 # ---------- Telegram wiring ----------
 def build_app(settings: Settings, db: DB, request=None):
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Update
+    from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Update
     from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                               MessageHandler, filters)
 
@@ -181,6 +193,14 @@ def build_app(settings: Settings, db: DB, request=None):
         except Exception as e:  # noqa: BLE001
             if "not modified" not in str(e).lower():  # same text within the same minute is fine
                 raise
+
+    async def send_x_handoff(bot, post) -> None:
+        """After a post goes out on Telegram: the same text with buttons to post it on X by hand."""
+        buttons = [InlineKeyboardButton("𝕏 Post on X", url=x_intent_url(post["headline"]))]
+        if len(post["headline"]) <= COPY_MAX:  # longer text: long-press the message to copy instead
+            buttons.append(InlineKeyboardButton("📋 Copy text", copy_text=CopyTextButton(post["headline"])))
+        await bot.send_message(settings.admin_chat_id, x_handoff_text(post), parse_mode="HTML",
+                               reply_markup=InlineKeyboardMarkup([buttons]), link_preview_options=no_preview)
 
     async def send_draft(bot, post) -> None:
         msg = await bot.send_message(settings.admin_chat_id, draft_text(db, post), parse_mode="HTML",
@@ -328,6 +348,7 @@ def build_app(settings: Settings, db: DB, request=None):
     app.bot_data["send_draft"] = send_draft
     app.bot_data["send_video_draft"] = send_video_draft
     app.bot_data["send_panel"] = send_panel
+    app.bot_data["send_x_handoff"] = send_x_handoff
     app.bot_data["refresh_panel"] = refresh_panel
     return app
 

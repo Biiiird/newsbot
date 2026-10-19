@@ -72,6 +72,7 @@ class Settings:
     x_access_token: str = ""
     x_access_secret: str = ""
     x_source_reply: bool = True
+    x_handoff: bool = False
 
     min_importance: int = 6
     auto_post: bool = False
@@ -178,6 +179,7 @@ def load_settings(env_file: str | None = ".env") -> Settings:
         x_access_token=_str("X_ACCESS_TOKEN"),
         x_access_secret=_str("X_ACCESS_SECRET"),
         x_source_reply=_bool("X_SOURCE_REPLY", True),
+        x_handoff=_bool("X_HANDOFF", False),
         min_importance=_int("MIN_IMPORTANCE", 6),
         auto_post=_bool("AUTO_POST", False),
         auto_min_importance=_int("AUTO_MIN_IMPORTANCE", 8),

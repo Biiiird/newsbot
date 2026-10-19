@@ -179,3 +179,22 @@ async def test_offline_announcement(bot_env, db, settings):
     edited = fake.sent("editMessageText")[-1]
     assert edited["message_id"] == 77 and "🔴 offline" in edited["text"] and "reply_markup" not in edited
     assert "shut down" in fake.sent("sendMessage")[-1]["text"]
+
+
+async def test_x_handoff_message(bot_env, db):
+    app, fake = bot_env
+    pid = _draft(db, 'JUST IN: 🇺🇸🇷🇺 President Trump says "a deal is close".')
+    await app.bot_data["send_x_handoff"](app.bot, db.get_post(pid))
+    sent = fake.sent("sendMessage")[-1]
+    assert "Ready for X" in sent["text"] and "over X" not in sent["text"]
+    markup = json.dumps(sent["reply_markup"])
+    assert "https://x.com/intent/post?text=JUST%20IN%3A%20" in markup
+    assert "copy_text" in markup
+
+
+async def test_x_handoff_long_text_warns_and_skips_copy(bot_env, db):
+    app, fake = bot_env
+    pid = _draft(db, "JUST IN: " + "word " * 60)
+    await app.bot_data["send_x_handoff"](app.bot, db.get_post(pid))
+    sent = fake.sent("sendMessage")[-1]
+    assert "over X's 280 limit" in sent["text"] and "copy_text" not in json.dumps(sent["reply_markup"])

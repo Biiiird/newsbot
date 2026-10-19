@@ -58,7 +58,8 @@ The default model is Haiku 4.5, which is cheap and fast. Each story costs one ca
 3. Start the bot with `python -m newsbot run`, open a private chat with it and send `/start`. It replies with your chat id, which goes in `ADMIN_CHAT_ID`. Then restart the bot.
 4. Drafts now arrive in that chat with **✅ Publish / ✏️ Edit / ❌ Reject** buttons. Edit asks you for the new text, then queues it.
 5. When you're happy with the drafts, set `DRY_RUN=false` to post for real.
-6. Send `/panel` to get the control panel. **⏸ Stop bot** pauses fetching, scoring and posting, while the process keeps listening so **▶️ Start bot** can resume it. A stop is remembered across restarts. Each time the server starts, it posts a fresh panel. When it shuts down cleanly, it marks the panel 🔴 offline. If it crashes or the computer sleeps, nothing can answer in Telegram. In that case, the panel's "Last check" time (refreshed every minute) stops moving.
+6. To post to X by hand without paying for the API, set `X_HANDOFF=true`. After each channel post, the bot sends you a **📤 Ready for X** message with the same text. **𝕏 Post on X** opens X's composer with the text filled in, and **📋 Copy text** copies it to your clipboard.
+7. Send `/panel` to get the control panel. **⏸ Stop bot** pauses fetching, scoring and posting, while the process keeps listening so **▶️ Start bot** can resume it. A stop is remembered across restarts. Each time the server starts, it posts a fresh panel. When it shuts down cleanly, it marks the panel 🔴 offline. If it crashes or the computer sleeps, nothing can answer in Telegram. In that case, the panel's "Last check" time (refreshed every minute) stops moving.
 
 Bot commands: `/pending` re-sends the waiting drafts, `/stats` shows counts, `/cancel` stops an edit.
 
