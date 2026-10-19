@@ -232,6 +232,7 @@ def test_caption_fits_counts_utf16(db):
     emoji = _post(db, headline="🇺🇦" * 256, images=())  # 256 flags = 1024 UTF-16 code units
     assert publisher.caption_fits(emoji, include_source=False)
     assert not publisher.caption_fits(emoji, include_source=True)
+    assert not publisher.caption_fits(emoji, include_source=False, signature="@GloRadar")
 
 
 def test_dry_run_prints_images(db, capsys):

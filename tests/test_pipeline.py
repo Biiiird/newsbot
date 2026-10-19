@@ -349,6 +349,8 @@ def test_telegram_text_and_targets(db, settings):
     t = publisher.telegram_text(p, True)
     assert t.startswith("<b>JUST IN:</b> test &lt;b&gt;&amp;") and 'href="https://err.ee/1?a=1&amp;b=2"' in t
     assert "Source" not in publisher.telegram_text(p, False)
+    signed = publisher.telegram_text(p, False, "@GloRadar")
+    assert signed.endswith("&amp;\n\n@GloRadar") and "@GloRadar" not in publisher.telegram_text(p, False)
     assert [x.name for x in publisher.build_targets(settings)] == ["dry_run"]
     settings.dry_run = False
     settings.telegram_channel_id = "@chan"

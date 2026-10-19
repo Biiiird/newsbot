@@ -50,10 +50,12 @@ def headline_html(headline: str) -> str:
     return html.escape(headline)
 
 
-def telegram_text(post, include_source: bool) -> str:
+def telegram_text(post, include_source: bool, signature: str = "") -> str:
     text = headline_html(post["headline"])
     if include_source and post["source_url"]:
         text += f'\n\nSource: <a href="{html.escape(post["source_url"], quote=True)}">{html.escape(post["source_name"] or "link")}</a>'
+    if signature:  # e.g. "@GloRadar", Telegram links it by itself
+        text += f"\n\n{html.escape(signature)}"
     return text
 
 
@@ -79,11 +81,13 @@ def x_intent_url(text: str) -> str:
     return "https://x.com/intent/post?" + urlencode({"text": text}, quote_via=quote)
 
 
-def caption_fits(post, include_source: bool) -> bool:
+def caption_fits(post, include_source: bool, signature: str = "") -> bool:
     """Whether the visible text fits in a photo caption (Telegram counts UTF-16 code units)."""
     visible = post["headline"]
     if include_source and post["source_url"]:
         visible += f"\n\nSource: {post['source_name'] or 'link'}"
+    if signature:
+        visible += f"\n\n{signature}"
     return len(visible.encode("utf-16-le")) // 2 <= CAPTION_LIMIT
 
 
@@ -99,15 +103,15 @@ class ConsoleTarget:
 class TelegramTarget:
     name = "telegram"
 
-    def __init__(self, bot, channel_id: str, include_source: bool):
-        self.bot, self.channel_id, self.include_source = bot, channel_id, include_source
+    def __init__(self, bot, channel_id: str, include_source: bool, signature: str = ""):
+        self.bot, self.channel_id, self.include_source, self.signature = bot, channel_id, include_source, signature
 
     async def publish(self, post) -> str | None:
         from telegram import LinkPreviewOptions
         from telegram.error import BadRequest
-        text = telegram_text(post, self.include_source)
+        text = telegram_text(post, self.include_source, self.signature)
         images = media.media_list(post)
-        if images and not caption_fits(post, self.include_source):
+        if images and not caption_fits(post, self.include_source, self.signature):
             log.info("post #%s is too long for a photo caption, posting without images", post["id"])
             images = []
         photos = await media.download(images)
@@ -162,7 +166,8 @@ def build_targets(settings: Settings, bot=None) -> list[Target]:
         return [ConsoleTarget()]
     targets: list[Target] = []
     if bot is not None and settings.telegram_channel_id:
-        targets.append(TelegramTarget(bot, settings.telegram_channel_id, settings.telegram_include_source))
+        targets.append(TelegramTarget(bot, settings.telegram_channel_id, settings.telegram_include_source,
+                                      settings.telegram_signature))
     if settings.x_enabled:
         targets.append(XTarget(settings))
     if not targets:

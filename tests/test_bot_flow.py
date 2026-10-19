@@ -198,3 +198,12 @@ async def test_x_handoff_long_text_warns_and_skips_copy(bot_env, db):
     await app.bot_data["send_x_handoff"](app.bot, db.get_post(pid))
     sent = fake.sent("sendMessage")[-1]
     assert "over X's 280 limit" in sent["text"] and "copy_text" not in json.dumps(sent["reply_markup"])
+
+
+async def test_x_handoff_has_no_telegram_signature(bot_env, db, settings):
+    app, fake = bot_env
+    settings.telegram_signature = "@GloRadar"  # only for the Telegram channel
+    pid = _draft(db, "JUST IN: 🇫🇷 France issues curfew for parts of central Paris.")
+    await app.bot_data["send_x_handoff"](app.bot, db.get_post(pid))
+    sent = fake.sent("sendMessage")[-1]
+    assert "GloRadar" not in sent["text"] and "GloRadar" not in json.dumps(sent["reply_markup"])

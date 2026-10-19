@@ -56,6 +56,7 @@ class Settings:
     admin_chat_id: str = ""
     admin_user_ids: set[int] = field(default_factory=set)
     telegram_include_source: bool = True
+    telegram_signature: str = ""
     attach_images: bool = True
     media_max_images: int = 2
     media_min_side: int = 600
@@ -167,6 +168,7 @@ def load_settings(env_file: str | None = ".env") -> Settings:
         admin_chat_id=admin_chat,
         admin_user_ids=admin_ids,
         telegram_include_source=_bool("TELEGRAM_INCLUDE_SOURCE", True),
+        telegram_signature=_str("TELEGRAM_SIGNATURE"),
         attach_images=_bool("ATTACH_IMAGES", True),
         media_max_images=_int("MEDIA_MAX_IMAGES", 2),
         media_min_side=_int("MEDIA_MIN_SIDE", 600),
